@@ -16,33 +16,42 @@ from portrait_composer.remap import (
 
 from .conftest import make_portrait_bundle
 
+BASE_LAYERS = [
+    ("neck", (255, 0, 0, 255)),
+    ("topwear", (0, 255, 0, 200)),
+    ("head", (0, 0, 255, 255)),
+]
+
 
 def _old_document(tmp_path: Path):
-    old_root = make_portrait_bundle(tmp_path / "old.portrait")
+    old_root = make_portrait_bundle(tmp_path / "old.portrait", layers=BASE_LAYERS)
     bundle = read_portrait_bundle(old_root)
-    document, _ = identity_assembly(bundle)
+    document, _, _ = identity_assembly(bundle)
     return document
 
 
-def test_exact_match_when_layer_id_unchanged(tmp_path: Path):
+def test_exact_match_when_tag_unchanged(tmp_path: Path):
     document = _old_document(tmp_path)
-    new_root = make_portrait_bundle(tmp_path / "new.portrait")  # identical layer ids
+    new_root = make_portrait_bundle(tmp_path / "new.portrait", layers=BASE_LAYERS)
     new_bundle = read_portrait_bundle(new_root)
 
     report = classify_remap(document, new_bundle)
     assert report.all_resolved
     statuses = {e.asset_id: e.status for e in report.entries}
-    assert statuses == {"body": EXACT_MATCH, "topwear": EXACT_MATCH, "head": EXACT_MATCH}
+    assert statuses == {"neck": EXACT_MATCH, "topwear": EXACT_MATCH, "head": EXACT_MATCH}
 
 
-def test_semantic_match_when_id_renamed_but_unique_semantic(tmp_path: Path):
+def test_semantic_match_when_tag_rekeyed_but_source_tag_still_unique(tmp_path: Path):
+    """topwear gets rekeyed to topwear_v2 in the new bundle, but its
+    source_tag still records 'topwear' -- exactly the schema-sanctioned
+    case SEMANTIC_MATCH exists for (see remap.py's module docstring)."""
     document = _old_document(tmp_path)
     new_root = make_portrait_bundle(
         tmp_path / "new.portrait",
         layers=[
-            ("body", "body", 10, (255, 0, 0, 255)),
-            ("topwear_v2", "torso", 40, (0, 255, 0, 200)),
-            ("head", "head", 60, (0, 0, 255, 255)),
+            ("neck", (255, 0, 0, 255)),
+            ("topwear_v2", (0, 255, 0, 200), "topwear"),
+            ("head", (0, 0, 255, 255)),
         ],
     )
     new_bundle = read_portrait_bundle(new_root)
@@ -54,15 +63,15 @@ def test_semantic_match_when_id_renamed_but_unique_semantic(tmp_path: Path):
     assert by_id["topwear"].candidates == ["topwear_v2"]
 
 
-def test_ambiguous_when_multiple_layers_share_semantic(tmp_path: Path):
+def test_ambiguous_when_multiple_new_tags_share_source_tag(tmp_path: Path):
     document = _old_document(tmp_path)
     new_root = make_portrait_bundle(
         tmp_path / "new.portrait",
         layers=[
-            ("body", "body", 10, (255, 0, 0, 255)),
-            ("topwear_a", "torso", 40, (0, 255, 0, 200)),
-            ("topwear_b", "torso", 41, (0, 200, 0, 200)),
-            ("head", "head", 60, (0, 0, 255, 255)),
+            ("neck", (255, 0, 0, 255)),
+            ("topwear_a", (0, 255, 0, 200), "topwear"),
+            ("topwear_b", (0, 200, 0, 200), "topwear"),
+            ("head", (0, 0, 255, 255)),
         ],
     )
     new_bundle = read_portrait_bundle(new_root)
@@ -74,13 +83,13 @@ def test_ambiguous_when_multiple_layers_share_semantic(tmp_path: Path):
     assert set(by_id["topwear"].candidates) == {"topwear_a", "topwear_b"}
 
 
-def test_orphaned_when_no_id_or_semantic_match(tmp_path: Path):
+def test_orphaned_when_tag_and_source_tag_both_gone(tmp_path: Path):
     document = _old_document(tmp_path)
     new_root = make_portrait_bundle(
         tmp_path / "new.portrait",
         layers=[
-            ("body", "body", 10, (255, 0, 0, 255)),
-            ("head", "head", 60, (0, 0, 255, 255)),
+            ("neck", (255, 0, 0, 255)),
+            ("head", (0, 0, 255, 255)),
         ],
     )
     new_bundle = read_portrait_bundle(new_root)
@@ -97,10 +106,10 @@ def test_apply_auto_resolvable_remap_never_touches_ambiguous(tmp_path: Path):
     new_root = make_portrait_bundle(
         tmp_path / "new.portrait",
         layers=[
-            ("body", "body", 10, (255, 0, 0, 255)),
-            ("topwear_a", "torso", 40, (0, 255, 0, 200)),
-            ("topwear_b", "torso", 41, (0, 200, 0, 200)),
-            ("head", "head", 60, (0, 0, 255, 255)),
+            ("neck", (255, 0, 0, 255)),
+            ("topwear_a", (0, 255, 0, 200), "topwear"),
+            ("topwear_b", (0, 200, 0, 200), "topwear"),
+            ("head", (0, 0, 255, 255)),
         ],
     )
     new_bundle = read_portrait_bundle(new_root)
@@ -112,8 +121,8 @@ def test_apply_auto_resolvable_remap_never_touches_ambiguous(tmp_path: Path):
     # AMBIGUOUS entry left untouched
     assert document.assets["topwear"].source_binding is old_binding
     # EXACT_MATCH entries rebound to the new revision
-    assert document.assets["body"].source_binding.source_layer_id == "body"
-    assert document.assets["body"].source_binding.revision != old_binding.revision
+    assert document.assets["neck"].source_binding.source_layer_id == "neck"
+    assert document.assets["neck"].source_binding.revision != old_binding.revision
 
     # manual resolution for the ambiguous one
     apply_manual_remap(document, "topwear", new_bundle, "topwear_b")

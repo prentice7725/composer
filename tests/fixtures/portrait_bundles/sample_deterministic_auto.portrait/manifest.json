@@ -1,0 +1,82 @@
+{
+  "format": "portrait-bundle",
+  "version": "1.0",
+  "canvas": {
+    "width": 40,
+    "height": 40,
+    "coordinate_system": "top-left-y-down",
+    "color_space": "srgb",
+    "alpha": "straight"
+  },
+  "semantics": {
+    "schema": "portrait-semantic-tags",
+    "version": "v3",
+    "z_order": [
+      "neck",
+      "topwear",
+      "head"
+    ],
+    "warnings": [
+      "missing_eyewhite"
+    ]
+  },
+  "original": "original.png",
+  "generation": {
+    "seed_mode": "deterministic_auto",
+    "attempt_index": 0,
+    "seed": 12345,
+    "canonical_regression_seed": 42,
+    "source_identity": "A001"
+  },
+  "layers": {
+    "neck": {
+      "path": "layers/neck.png",
+      "source_tag": "neck"
+    },
+    "topwear": {
+      "path": "layers/topwear.png",
+      "source_tag": "topwear"
+    },
+    "head": {
+      "path": "layers/head.png",
+      "source_tag": "head"
+    }
+  },
+  "raw_layers": {
+    "eyewhite": "raw_layers/eyewhite.png"
+  },
+  "layer_contract": {
+    "canonical_stage": "production_repaired",
+    "raw_layers_preserved": true,
+    "silhouette_guard": true,
+    "semantic_ownership": {
+      "version": "1.0",
+      "stage": "post_repair_pre_remainder",
+      "report": "diagnostics/semantic_ownership.json"
+    },
+    "fidelity_repair": {
+      "version": "1.0",
+      "order": [
+        "reclaim_occluded",
+        "fit_layer_tone",
+        "fit_edge_alpha",
+        "clean_garment_orphans",
+        "fit_edge_alpha_final",
+        "fit_mouth_contact",
+        "fit_seam_residual"
+      ],
+      "report": "diagnostics/fidelity.json"
+    }
+  },
+  "diagnostics": {
+    "occlusion_graph": "diagnostics/occlusion_graph.json"
+  },
+  "validation": {
+    "static_reconstruction": "pass",
+    "seams": "pass",
+    "local_fidelity": "pass"
+  },
+  "source": {
+    "filename": "input.png"
+  }
+}

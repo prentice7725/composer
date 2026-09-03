@@ -15,6 +15,16 @@ layers:
 AMBIGUOUS and ORPHANED are never auto-resolved ("silent guess 금지", #8) --
 a caller must call ``apply_manual_remap`` explicitly, or the report stays
 unresolved.
+
+Note on the real Portrait Bundle v1 producer (bundle.py): ``source_layer_id``
+is a layer's ``tag`` (the exact dict key -- what EXACT_MATCH compares) and
+``fallback_semantic`` is its ``source_tag`` (what SEMANTIC_MATCH/AMBIGUOUS
+fall back to). Today's single exporter always sets ``source_tag == tag``,
+so in practice a reharvest either finds the same tag again (EXACT_MATCH) or
+doesn't (ORPHANED) -- SEMANTIC_MATCH/AMBIGUOUS only fire once a layer gets
+rekeyed under a new tag while its ``source_tag`` still records what it
+semantically came from, which the schema allows even if no producer does
+it yet.
 """
 from __future__ import annotations
 
@@ -22,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .assets import AssetDefinition
-from .bundle import PortraitBundle
+from .bundle import PortraitBundle, source_id_for
 from .document import AssemblyDocument
 from .sources import SourceAsset, SourceBinding, content_hash
 
@@ -95,7 +105,7 @@ def apply_auto_resolvable_remap(document: AssemblyDocument, new_bundle: Portrait
     Never touches AMBIGUOUS/ORPHANED entries -- those require
     ``apply_manual_remap``.
     """
-    source_id = new_bundle.source.get("source_id", new_bundle.root.name)
+    source_id = source_id_for(new_bundle)
     revision = content_hash(new_bundle.root / "manifest.json")
     by_id = {l.id: l for l in new_bundle.layers}
 
@@ -123,7 +133,7 @@ def apply_manual_remap(document: AssemblyDocument, asset_id: str, new_bundle: Po
     if chosen_layer_id not in by_id:
         raise KeyError(f"no such layer in new bundle: {chosen_layer_id!r}")
     new_layer = by_id[chosen_layer_id]
-    source_id = new_bundle.source.get("source_id", new_bundle.root.name)
+    source_id = source_id_for(new_bundle)
     revision = content_hash(new_bundle.root / "manifest.json")
 
     with document.transaction():

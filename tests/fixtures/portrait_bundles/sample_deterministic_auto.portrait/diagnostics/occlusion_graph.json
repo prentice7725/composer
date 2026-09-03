@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "alpha_threshold": 10,
+  "depth_available": false,
+  "edges": [
+    {
+      "front": "topwear",
+      "back": "neck",
+      "disocclusion_risk": 0.72
+    }
+  ]
+}

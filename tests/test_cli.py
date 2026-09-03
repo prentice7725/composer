@@ -18,6 +18,25 @@ def test_cli_identity_validate_render(portrait_bundle: Path, tmp_path: Path, cap
     assert main(["render", str(out_dir)]) == 0
 
 
+def test_cli_identity_prints_import_warnings(tmp_path: Path, capsys):
+    from .conftest import make_portrait_bundle
+
+    root = make_portrait_bundle(tmp_path / "in.portrait", semantic_warnings=["missing_eyewhite"])
+    out_dir = tmp_path / "out.assembly"
+    assert main(["identity", str(root), "-o", str(out_dir)]) == 0
+    captured = capsys.readouterr()
+    assert "warning: semantic warning: missing_eyewhite" in captured.out
+
+
+def test_cli_identity_rejects_contract_violation(tmp_path: Path, capsys):
+    from .conftest import make_portrait_bundle
+
+    root = make_portrait_bundle(tmp_path / "in.portrait", version="2.0")
+    out_dir = tmp_path / "out.assembly"
+    assert main(["identity", str(root), "-o", str(out_dir)]) == 1
+    assert not out_dir.exists()
+
+
 def test_cli_validate_fails_on_missing_reference(portrait_bundle: Path, tmp_path: Path):
     out_dir = tmp_path / "out.assembly"
     main(["identity", str(portrait_bundle), "-o", str(out_dir)])
@@ -58,8 +77,8 @@ def test_cli_remap_reports_unresolved_and_exits_nonzero(portrait_bundle: Path, t
     new_root = make_portrait_bundle(
         tmp_path / "new.portrait",
         layers=[
-            ("body", "body", 10, (255, 0, 0, 255)),
-            ("head", "head", 60, (0, 0, 255, 255)),
+            ("neck", (255, 0, 0, 255)),
+            ("head", (0, 0, 255, 255)),
         ],
     )
 

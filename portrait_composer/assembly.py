@@ -2,10 +2,13 @@
 
 Directive refs: PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md #9, #31.
 
-``identity_assembly`` turns one Portrait Bundle into an AssemblyDocument
-with no changes: every layer becomes one AssetDefinition + one identity-
-transform LayerInstance, in the bundle's own draw order. Acceptance (#9):
-Composer's rendered reference must equal SeeThrough's canonical composite.
+``identity_assembly`` turns one Portrait Bundle (real Portrait Bundle v1 --
+see bundle.py's module docstring) into an AssemblyDocument with no changes:
+every canonical (``layers/``) entry becomes one AssetDefinition + one
+identity-transform LayerInstance, ordered by the bundle's own
+``semantics.z_order``. Acceptance (#9): Composer's rendered reference must
+equal SeeThrough's canonical composite -- i.e. compositing exactly
+``layers/*.png`` in z_order, nothing from ``raw_layers/``.
 
 ``apply_recipe`` covers the C0 slice of "WHAT TO USE / WHERE TO PLACE /
 WHAT MAY MOVE" editing (mission statement, #0): visibility, opacity,
@@ -19,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from .assets import AssetDefinition
-from .bundle import PortraitBundle
+from .bundle import PortraitBundle, source_id_for
 from .document import AssemblyDocument
 from .instances import LayerInstance, Transform
 from .sources import SourceAsset, SourceBinding, content_hash
@@ -29,60 +32,74 @@ def instance_id_for(layer_id: str) -> str:
     return f"{layer_id}__instance"
 
 
-def identity_assembly(bundle: PortraitBundle) -> tuple[AssemblyDocument, dict]:
-    """Returns (document, image_sources) where image_sources maps
-    instance id -> Path to the source layer PNG to copy into the bundle."""
+def identity_assembly(bundle: PortraitBundle) -> tuple[AssemblyDocument, dict, list]:
+    """Returns (document, image_sources, import_warnings).
+
+    ``image_sources`` maps instance id -> Path to the source layer PNG to
+    copy into the bundle. ``import_warnings`` forwards ``bundle.warnings``
+    (semantics.warnings, non-"pass" validation statuses, high-risk
+    occlusion edges) -- never used to block the import, only surfaced.
+    """
     document = AssemblyDocument()
     image_sources: dict[str, Path] = {}
 
-    source_id = bundle.source.get("source_id", bundle.root.name)
-    manifest_path = bundle.root / "manifest.json"
-    revision = content_hash(manifest_path)
+    source_id = source_id_for(bundle)
+    revision = content_hash(bundle.root / "manifest.json")
 
     with document.transaction():
-        document.sources[source_id] = SourceAsset(source_id=source_id, path=str(bundle.root))
+        document.sources[source_id] = SourceAsset(
+            source_id=source_id,
+            path=str(bundle.root),
+            metadata={
+                "generation": dict(bundle.generation),
+                "canvas": dict(bundle.canvas),
+                "validation": dict(bundle.validation),
+            },
+        )
 
-        ordered_layers = sorted(bundle.layers, key=lambda l: l.draw_order)
         draw_order = []
-        for layer in ordered_layers:
+        for layer in bundle.layers:  # already sorted by z_order-derived draw_order
             asset = AssetDefinition(
-                id=layer.id,
-                semantic=layer.semantic,
+                id=layer.tag,
+                semantic=layer.tag,
                 source_binding=SourceBinding(
                     source_id=source_id,
                     revision=revision,
-                    source_layer_id=layer.id,
-                    fallback_semantic=layer.semantic,
+                    source_layer_id=layer.tag,
+                    fallback_semantic=layer.source_tag,
                 ),
-                planes=list(layer.planes),
+                planes=[layer.tag],
             )
             document.add_asset(asset)
 
-            inst_id = instance_id_for(layer.id)
+            inst_id = instance_id_for(layer.tag)
             instance = LayerInstance(
                 id=inst_id,
                 asset_ref=asset.id,
-                slot=layer.semantic,
+                slot=layer.tag,  # placeholder pending C1 slot-vocabulary mapping (slots.py)
                 draw_order=layer.draw_order,
                 transform=Transform(),
             )
             document.add_instance(instance)
             draw_order.append(inst_id)
 
+            # canonical layers/ only -- raw_layers/ is never read here (forensic-only,
+            # never a fallback for a missing canonical layer, per PORTRAIT_BUNDLE_V1.md).
             image_sources[inst_id] = bundle.layer_path(layer)
             document.provenance.record(
                 inst_id,
                 operation="identity_import",
                 sources=[source_id],
-                source_layer_id=layer.id,
+                source_layer_id=layer.tag,
+                source_tag=layer.source_tag,
                 revision=revision,
+                generation=dict(bundle.generation),
             )
 
         document.composition["draw_order"] = draw_order
-        if bundle.canvas:
-            document.composition["canvas"] = dict(bundle.canvas)
+        document.composition["canvas"] = dict(bundle.canvas)
 
-    return document, image_sources
+    return document, image_sources, list(bundle.warnings)
 
 
 class RecipeError(Exception):

@@ -22,16 +22,21 @@ import sys
 from pathlib import Path
 
 from .assembly import RecipeError, apply_recipe, identity_assembly
-from .bundle import assembly_layers_dir, read_assembly_bundle, read_portrait_bundle, write_assembly_bundle
+from .bundle import BundleError, assembly_layers_dir, read_assembly_bundle, read_portrait_bundle, write_assembly_bundle
 from .document import TransactionValidationError
 from .remap import classify_remap
 from .render import render_reference
 
 
 def cmd_identity(args: argparse.Namespace) -> int:
-    bundle = read_portrait_bundle(Path(args.IN))
     try:
-        document, image_sources = identity_assembly(bundle)
+        bundle = read_portrait_bundle(Path(args.IN))
+    except BundleError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        document, image_sources, import_warnings = identity_assembly(bundle)
     except TransactionValidationError as e:
         print("identity import failed validation:", file=sys.stderr)
         for err in e.result.errors:
@@ -41,6 +46,8 @@ def cmd_identity(args: argparse.Namespace) -> int:
     write_assembly_bundle(document, image_sources, Path(args.out))
     result = document.validate()
     print(f"wrote assembly bundle: {args.out}")
+    for w in import_warnings:
+        print(f"warning: {w}")
     for w in result.warnings:
         print(f"warning: {w}")
     return 0
@@ -79,11 +86,15 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    bundle = read_portrait_bundle(Path(args.IN))
+    try:
+        bundle = read_portrait_bundle(Path(args.IN))
+    except BundleError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     recipe = json.loads(Path(args.recipe).read_text(encoding="utf-8"))
 
     try:
-        document, image_sources = identity_assembly(bundle)
+        document, image_sources, import_warnings = identity_assembly(bundle)
         apply_recipe(document, recipe, image_sources)
     except TransactionValidationError as e:
         print("apply failed validation:", file=sys.stderr)
@@ -96,12 +107,18 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
     write_assembly_bundle(document, image_sources, Path(args.out))
     print(f"wrote assembly bundle: {args.out}")
+    for w in import_warnings:
+        print(f"warning: {w}")
     return 0
 
 
 def cmd_remap(args: argparse.Namespace) -> int:
     old_document = read_assembly_bundle(Path(args.OLD))
-    new_bundle = read_portrait_bundle(Path(args.NEW))
+    try:
+        new_bundle = read_portrait_bundle(Path(args.NEW))
+    except BundleError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     report = classify_remap(old_document, new_bundle)
 
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True))

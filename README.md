@@ -28,9 +28,11 @@ portrait-composer apply IN.portrait recipe.json -o OUT.assembly
 portrait-composer remap OUT.assembly NEW.portrait
 ```
 
-`IN.portrait` is a Portrait Bundle -- see the assumed interim contract
-documented at the top of [portrait_composer/bundle.py](portrait_composer/bundle.py)
-(the real `seethrough-portrait` output format isn't implemented yet).
+`IN.portrait` is a **Portrait Bundle v1**, the real contract produced by
+[`prentice7725/seethrough-portrait`](https://github.com/prentice7725/seethrough-portrait)
+-- see [docs/PORTRAIT_BUNDLE_V1.md](docs/PORTRAIT_BUNDLE_V1.md) and the
+reader's own notes at the top of
+[portrait_composer/bundle.py](portrait_composer/bundle.py).
 
 ## Tests
 
