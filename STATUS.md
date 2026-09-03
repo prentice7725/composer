@@ -260,6 +260,26 @@ Not done (out of locked C2 scope, left for later phases):
 
 ## Not implemented at all
 
-`gui.py`, `workflow.py`, and `compatibility.py` remain deferred integration
-surfaces. The Composer does not implement AutoRig mesh/deformer math,
-constraint solving, runtime parameter binding, or physics constants.
+`workflow.py` and `compatibility.py` remain deferred integration surfaces.
+The Composer does not implement AutoRig mesh/deformer math, constraint
+solving, runtime parameter binding, or physics constants.
+
+## C5-A -- GUI Shell / Canvas / Tree / Inspector
+
+Implemented as an optional PySide6 client under `portrait_composer/ui/`.
+The public facade in `gui.py` and the `gui` CLI command import PySide6 lazily;
+core/CLI commands remain usable without the GUI extra.
+
+- [x] optional PySide6 dependency and `portrait-composer-gui` entry point
+- [x] `QMainWindow` shell with context bar, Canvas, Tree, Inspector,
+  Context Workbench, menus, and status bar
+- [x] Assembly Bundle v0.2 open/save through core bundle I/O
+- [x] core `render_reference` output used as the canvas image truth
+- [x] shared Qt-free selection/session state with context persistence
+- [x] Tree ↔ Canvas ↔ Inspector selection synchronization
+- [x] Canvas pan/zoom/fit and visibility display
+- [x] headless facade/import isolation tests without PySide6
+
+C5-B onward (transform gizmos, Harvest/Donor/Rig/Bake workbenches,
+diagnostics navigation, and workspace persistence) remains intentionally
+out of this first GUI shell implementation.

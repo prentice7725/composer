@@ -14,6 +14,8 @@ Implements C0 + C0.5 + C1 + C2 + C3 + C4 of PORTRAIT_COMPOSER_IMPLEMENTATION_DIR
   (donors.py, expressions.py)
 - C4 = typed RigIntent, upper_torso_secondary authoring, and visual preflight
   (rig_intent.py, secondary_regions.py)
+- C5-A = optional PySide6 shell with core-rendered Canvas, Tree, Inspector,
+  context workbench, and ephemeral selection/session state (ui/)
 
 See that directive (and SEETHROUGH_..._MASTER_v0.2.md) for the full spec;
 see STATUS.md in the repo root for what's implemented vs. deferred.

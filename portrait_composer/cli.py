@@ -132,6 +132,18 @@ def cmd_remap(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    # Keep PySide6 out of this module's import path.  gui.launch imports it
+    # only after the user explicitly selects the GUI entry point.
+    from .gui import GuiUnavailableError, launch
+
+    try:
+        return launch([args.path] if args.path else None)
+    except GuiUnavailableError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="portrait-composer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -159,6 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("OLD")
     p.add_argument("NEW")
     p.set_defaults(func=cmd_remap)
+
+    p = sub.add_parser("gui", help="launch the optional PySide6 authoring interface")
+    p.add_argument("path", nargs="?", help="optional Assembly Bundle directory to open")
+    p.set_defaults(func=cmd_gui)
 
     return parser
 

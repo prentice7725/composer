@@ -1,17 +1,31 @@
-"""Gui.
+"""Public GUI launcher facade.
 
-Status: NOT IMPLEMENTED -- deferred to phase GUI.
-Directive ref: PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md #3
-
-Interactive editor. Explicitly deferred: "GUI보다 먼저 AssemblyDocument를 구현" (#3,
-'document core first'). Nothing here until C0's document/CLI surface is
-stable.
+PySide6 is intentionally imported only when the GUI is launched, so all
+headless CLI/core commands remain usable without the optional GUI extra.
 """
 from __future__ import annotations
 
 
-def _not_implemented(*_args, **_kwargs):
-    raise NotImplementedError(
-        "gui.py is phase GUI scope (see module docstring); "
-        "not part of the C0/C0.5/C1 implementation."
-    )
+class GuiUnavailableError(RuntimeError):
+    pass
+
+
+def launch(argv: list[str] | None = None) -> int:
+    """Launch C5-A without importing PySide6 at module import time."""
+    try:
+        from .ui.app import run_gui
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.startswith("PySide6"):
+            raise GuiUnavailableError(
+                "PySide6 is required for the GUI; install with `pip install -e .[gui]`"
+            ) from exc
+        raise
+    return run_gui(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return launch(argv)
+    except GuiUnavailableError as exc:
+        print(f"error: {exc}")
+        return 2

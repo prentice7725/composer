@@ -12,6 +12,11 @@ Full spec: [docs/PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md](docs/PORTRA
 Current implementation status: [STATUS.md](STATUS.md) (**C0-C4 library
 features implemented**; GUI and AutoRig runtime remain separate concerns).
 
+The first GUI shell (C5-A) is implemented as an optional PySide6 client. To
+use it, install `pip install -e ".[gui]"` and run
+`portrait-composer-gui [ASSEMBLY_BUNDLE]`. Core/CLI commands do not require
+PySide6.
+
 ## Install
 
 ```sh
