@@ -17,8 +17,8 @@ a link it's actually a member of, and vice versa), VariantSet active-member
 validity, and an unrecognized slot (soft -- slots.py's vocabulary is
 explicitly open).
 
-Occlusion/bake/secondary checks are C2+ and remain TODO stubs -- they need
-data (geometry, bake state) this phase does not populate yet.
+C4 checks validate the typed RigIntent vocabulary and secondary-region shape.
+This is authoring-contract validation, not AutoRig mesh/deformation QA.
 """
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 
 from . import hierarchy as _hierarchy
 from .slots import is_known_slot
+from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, LOGICAL_SURFACES
+from .secondary_regions import GEOMETRY_KINDS, RESPONSE_PROFILES
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -139,17 +141,57 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
         if active is not None and active not in members:
             errors.append(f"variant_set {vs_id!r}: active {active!r} not in members")
 
-    # rig intent: regions/attachments must target real instances or slots
+    # rig intent: regions/attachments must target real instances or slots;
+    # values are Composer vocabulary, not AutoRig solver settings.
     rig_intent = document.rig_intent or {}
     slot_names = {inst.slot for inst in document.instances.values()}
+    semantic_names = {asset.semantic for asset in document.assets.values()}
+    valid_targets = instance_ids | slot_names | semantic_names | set(LOGICAL_SURFACES)
+    for ref, scope in rig_intent.get("deformation_scopes", {}).items():
+        if scope not in DEFORMATION_SCOPES:
+            errors.append(
+                f"rig_intent.deformation_scopes[{ref!r}]: invalid scope {scope!r}; "
+                f"expected one of {DEFORMATION_SCOPES!r}"
+            )
+        if ref not in valid_targets:
+            errors.append(f"rig_intent.deformation_scopes[{ref!r}]: invalid target {ref!r}")
     for region_id, region in rig_intent.get("regions", {}).items():
         target = region.get("target")
-        if target is not None and target not in instance_ids and target not in slot_names:
+        if target is not None and target not in valid_targets:
             errors.append(f"rig_intent.regions[{region_id!r}]: invalid target {target!r}")
+        geometry = region.get("geometry", {})
+        if geometry.get("kind") not in GEOMETRY_KINDS:
+            errors.append(
+                f"rig_intent.regions[{region_id!r}]: invalid geometry kind {geometry.get('kind')!r}"
+            )
+        profile = region.get("response_profile")
+        if profile not in RESPONSE_PROFILES:
+            errors.append(f"rig_intent.regions[{region_id!r}]: invalid response_profile {profile!r}")
+        strength = region.get("author_strength")
+        if not isinstance(strength, (int, float)) or not 0 <= strength <= 1:
+            errors.append(f"rig_intent.regions[{region_id!r}]: author_strength must be in [0, 1]")
+        for lock_name, lock in region.get("locks", {}).items():
+            if not isinstance(lock, (int, float)) or not 0 <= lock <= 1:
+                errors.append(f"rig_intent.regions[{region_id!r}]: lock {lock_name!r} must be in [0, 1]")
     for attach_id, attach in rig_intent.get("attachments", {}).items():
         for key in ("target", "child"):
             ref = attach.get(key)
-            if ref is not None and ref not in instance_ids and ref not in slot_names:
+            if ref is not None and ref not in valid_targets:
                 errors.append(f"rig_intent.attachments[{attach_id!r}]: broken attachment {key} {ref!r}")
+        if attach.get("mode") not in ATTACHMENT_MODES:
+            errors.append(
+                f"rig_intent.attachments[{attach_id!r}]: invalid mode {attach.get('mode')!r}; "
+                f"expected one of {ATTACHMENT_MODES!r}"
+            )
+
+    # ExpressionPreset is a thin bundle of VariantSet members.  Keep it
+    # explicit in the document, but never turn it into a new runtime system.
+    for preset_id, preset in getattr(document, "expressions", {}).items():
+        for set_id, member in preset.get("variants", {}).items():
+            variant_set = document.variant_sets.get(set_id)
+            if variant_set is None:
+                errors.append(f"expression {preset_id!r}: missing variant_set {set_id!r}")
+            elif member not in variant_set.get("members", []):
+                errors.append(f"expression {preset_id!r}: {member!r} is not a member of variant_set {set_id!r}")
 
     return ValidationResult(errors=errors, warnings=warnings)

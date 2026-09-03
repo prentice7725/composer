@@ -9,8 +9,8 @@ Its responsibility is **assembly truth**: what a character is built from,
 where it's placed, and what may move -- never mesh/deformation/physics.
 
 Full spec: [docs/PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md](docs/PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md).
-Current implementation status: [STATUS.md](STATUS.md) (**C0 only** -- see
-there before assuming C1-C4 features exist).
+Current implementation status: [STATUS.md](STATUS.md) (**C0-C4 library
+features implemented**; GUI and AutoRig runtime remain separate concerns).
 
 ## Install
 

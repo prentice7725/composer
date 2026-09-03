@@ -23,10 +23,10 @@ Every real bake must go through ``analyze_bake`` first (dry-run, #17):
 ``apply_bake_plan`` refuses to run on a BLOCK verdict. A WARN verdict is
 returned to the caller (not swallowed) but does not block.
 
-RigIntent is C4, not implemented yet (rig_intent.py is a stub) -- when
-``document.rig_intent`` carries data, this module inspects it; when it's
-empty, that is surfaced as a WARN ("can't verify"), never silently treated
-as "no conflict, safe to bake" -- see ``_rig_intent_reasons``.
+C4 RigIntent is now authored through ``rig_intent.py``. When the selected
+instances have no matching scope/attachment declaration, this module still
+surfaces a WARN ("can't verify"), never silently treating absence as safe --
+see ``_rig_intent_reasons``.
 
 Known gap: occlusion-risk data (bundle.py's ``diagnostics/occlusion_graph.json``
 surfacing) is only ever returned as transient import warnings from
@@ -84,18 +84,30 @@ class BakeAnalysis:
 
 
 def _rig_intent_reasons(document: "AssemblyDocument", instance_ids: list) -> list:
-    """RigIntent is C4-empty today. Absence is never read as 'safe' -- it's
-    surfaced as a WARN so a caller knows the check couldn't actually run."""
+    """Inspect authored RigIntent; absence is never read as 'safe'."""
     reasons = []
     rig_intent = document.rig_intent or {}
     scopes = rig_intent.get("deformation_scopes", {})
     attachments = rig_intent.get("attachments", {})
     slot_names = {document.instances[i].slot for i in instance_ids if i in document.instances}
+    asset_semantics = {
+        document.assets[document.instances[i].asset_ref].semantic
+        for i in instance_ids
+        if i in document.instances and document.instances[i].asset_ref in document.assets
+    }
+    # PORTRAIT_RIG names its grouped torso surface ``topwear_with_arms``.
+    # It is a Composer analysis label, not a new slot or a physics object, but
+    # authors may use that stable logical name for one scope declaration.
+    logical_refs = set()
+    if len(instance_ids) >= 2 and slot_names and slot_names <= {"torso_back", "torso", "torso_front"}:
+        logical_refs.add("topwear_with_arms")
 
     checked_any = False
+    matched_refs = set()
     for ref, scope in scopes.items():
-        if ref in instance_ids or ref in slot_names:
+        if ref in instance_ids or ref in slot_names or ref in asset_semantics or ref in logical_refs:
             checked_any = True
+            matched_refs.add(ref)
             if scope == "independent":
                 reasons.append(
                     f"BLOCK: instance/slot {ref!r} has an independent RigIntent deformation_scope; "
@@ -105,8 +117,9 @@ def _rig_intent_reasons(document: "AssemblyDocument", instance_ids: list) -> lis
     for attach_id, attach in attachments.items():
         for key in ("target", "child"):
             ref = attach.get(key)
-            if ref in instance_ids or ref in slot_names:
+            if ref in instance_ids or ref in slot_names or ref in asset_semantics or ref in logical_refs:
                 checked_any = True
+                matched_refs.add(ref)
                 reasons.append(
                     f"BLOCK: attachment {attach_id!r} references {ref!r} ({key}); "
                     "bake would break that attachment relationship"

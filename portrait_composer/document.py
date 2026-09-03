@@ -58,6 +58,9 @@ class AssemblyDocument:
         self.variant_sets: dict = {}
         self.links: dict = {}
         self.rig_intent: dict = {"regions": {}, "attachments": {}, "deformation_scopes": {}}
+        # C3 ExpressionPreset storage.  Presets are only a thin mapping over
+        # VariantSets; AutoRig parameter binding is intentionally absent.
+        self.expressions: dict = {}
         self.composition: dict = {"draw_order": [], "canvas": {}}
         self.provenance = ProvenanceLog()
         self.history = HistoryManager()
@@ -114,6 +117,7 @@ class AssemblyDocument:
         self.variant_sets = restored.variant_sets
         self.links = restored.links
         self.rig_intent = restored.rig_intent
+        self.expressions = restored.expressions
         self.composition = restored.composition
         self.provenance = restored.provenance
         # history/undo state itself is NOT part of the document snapshot.
@@ -152,6 +156,7 @@ class AssemblyDocument:
             "variant_sets": copy.deepcopy(self.variant_sets),
             "links": copy.deepcopy(self.links),
             "rig_intent": copy.deepcopy(self.rig_intent),
+            "expressions": copy.deepcopy(self.expressions),
             "composition": copy.deepcopy(self.composition),
             "provenance": self.provenance.to_dict(),
         }
@@ -168,6 +173,12 @@ class AssemblyDocument:
         doc.rig_intent = copy.deepcopy(
             d.get("rig_intent", {"regions": {}, "attachments": {}, "deformation_scopes": {}})
         )
+        doc.expressions = copy.deepcopy(d.get("expressions", {}))
         doc.composition = copy.deepcopy(d.get("composition", {"draw_order": [], "canvas": {}}))
         doc.provenance = ProvenanceLog.from_dict(d.get("provenance", {}))
         return doc
+
+    @property
+    def expression_presets(self) -> dict:
+        """Compatibility/readability alias for the C3 preset map."""
+        return self.expressions

@@ -30,9 +30,9 @@ analyze from apply (so a caller -- CLI, GUI, or an MCP tool -- can say
   directly for a manual grouping if you actually want one under this
   profile.
 
-C2 does not implement upper_torso_secondary (C4) -- PORTRAIT_RIG's torso
-grouping only leaves a single deformable surface *available* for that
-later, per the directive's final rule; it makes no motion decision itself.
+PORTRAIT_RIG's torso grouping leaves a single deformable surface available
+for upper_torso_secondary; it makes no motion decision itself. C4's region
+authoring can declare the resulting logical surface's RigIntent separately.
 """
 from __future__ import annotations
 

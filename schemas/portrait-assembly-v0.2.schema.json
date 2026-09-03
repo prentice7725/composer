@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://portrait-composer/schemas/portrait-assembly-v0.2.schema.json",
   "title": "Portrait Assembly Bundle manifest.json",
-  "description": "Directive ref: PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md #29-30. Only the C0 fields are strictly shaped; C1+ fields (hierarchy, variant_sets, links, rig_intent) are reserved as free-form objects until their owning phase lands, matching the directive's own incremental data-model lock.",
+  "description": "Directive ref: PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md #29-30. Composer C3/C4 authoring data is serialized, while AutoRig runtime and physics data are intentionally absent.",
   "type": "object",
   "required": ["format", "version", "sources", "assets", "instances", "composition", "provenance"],
   "additionalProperties": false,
@@ -38,6 +38,7 @@
 
     "hierarchy": { "type": "object", "description": "C1 -- {nodes: {node_id -> {parent, ref, label}}, children: {parent_id_or_\"\" -> [node_id,...]}} (directive #11, hierarchy.py)" },
     "variant_sets": { "type": "object", "description": "C1 -- VariantSet map, id -> {mode, default, active, members} (directive #12, variants.py)" },
+    "expressions": { "type": "object", "description": "C3 -- thin ExpressionPreset map over VariantSets; no runtime parameter binding" },
     "links": { "type": "object", "description": "C1 -- TransformLink map, id -> {members: [instance_id,...]} (directive #11, links.py)" },
 
     "rig_intent": {

@@ -64,6 +64,33 @@ def remove_variant_set(document: "AssemblyDocument", vs_id: str) -> None:
     del document.variant_sets[vs_id]
 
 
+def add_member(document: "AssemblyDocument", vs_id: str, member_id: str, *, activate: bool = False) -> None:
+    """Add one existing LayerInstance to a VariantSet (C3 donor support)."""
+    vs = document.variant_sets.get(vs_id)
+    if vs is None:
+        raise VariantSetError(f"no such variant set: {vs_id!r}")
+    if member_id not in document.instances:
+        raise VariantSetError(f"variant set {vs_id!r}: member {member_id!r} is not an instance")
+    if member_id not in vs["members"]:
+        vs["members"].append(member_id)
+    if vs.get("mode") == "exclusive" and member_id != vs.get("active"):
+        # Preserve the authoring/reference invariant: adding an expression
+        # donor must not make two exclusive variants render simultaneously.
+        document.instances[member_id].visible = False
+    if activate:
+        set_active(document, vs_id, member_id)
+
+
+def create_or_add_member(
+    document: "AssemblyDocument", vs_id: str, member_id: str, *, default: bool = False
+) -> None:
+    """Create a standard exclusive set when absent, otherwise append a member."""
+    if vs_id not in document.variant_sets:
+        add_variant_set(document, vs_id, members=[member_id], default=member_id)
+    else:
+        add_member(document, vs_id, member_id, activate=default)
+
+
 def set_active(document: "AssemblyDocument", vs_id: str, member_id: str) -> None:
     """The "VariantSet exclusive 동작" operation: switches the active
     member and, in exclusive mode, shows only that member's instance."""

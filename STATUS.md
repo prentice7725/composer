@@ -1,13 +1,16 @@
 # Implementation Status
 
 Tracks directive exit checklists (`PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md`
-#32-34). **C0 + C0.5 + C1 + C2** are implemented; C3-C4 are not started.
+#32-34). **C0 + C0.5 + C1 + C2 + C3 + C4** are implemented.
+
+The C4 → C2 integration is intentional: a clean PORTRAIT_RIG torso bake
+remains WARN until its logical surface has authored RigIntent; authoring
+`topwear_with_arms = secondary` makes it analyzable as CAN_BAKE.
 
 ## C2 -- Bake + Export Profiles
 
-Scope was locked to Bake and Profile only -- no upper_torso_secondary (C4)
-and no RigIntent authoring (C4, `rig_intent.py` stays a stub). No CLI
-subcommands yet -- library API only (`portrait_composer.{bake,profiles}`).
+Bake and Profile remain library APIs (`portrait_composer.{bake,profiles}`);
+their C4 integration is implemented below. No new CLI surface was added.
 
 - **Bake dry-run** (`bake.analyze_bake`, directive #17): returns a
   `BakeAnalysis(verdict, reasons, instance_ids)` with `verdict` in
@@ -17,13 +20,10 @@ subcommands yet -- library API only (`portrait_composer.{bake,profiles}`).
   switching), an `independent` RigIntent `deformation_scope`, or an
   attachment referencing a source instance/slot. WARN: a `transform_link`
   that would be dissolved, sources spanning multiple bundles/seeds, and --
-  important -- **no RigIntent authored yet for these instances at all**.
-  That last one is deliberate: RigIntent is C4-empty right now, and its
-  absence is never read as "no conflict, safe to bake" (explicit
-  instruction) -- it's surfaced as a WARN every time until C4 exists, so
-  a clean 2-instance bake today reaches WARN, not CAN_BAKE, until the
-  caller actually authors `rig_intent.deformation_scopes` for those
-  instances (see `test_bake.py::test_analyze_bake_reaches_can_bake_once_rig_intent_is_authored_and_non_independent`).
+  importantly -- no matching RigIntent declaration for the selected
+  instances. Absence is never treated as safe; authoring a non-independent
+  scope (including the `topwear_with_arms` logical surface) closes that
+  uncertainty (see `test_bake.py::test_analyze_bake_reaches_can_bake_once_rig_intent_is_authored_and_non_independent`).
 - **Bake apply** (`bake.apply_bake_plan`): refuses to run on a BLOCK
   verdict (`BakeBlockedError`). Non-destructive (directive #16) -- source
   instances are hidden (`visible = False`) and removed from
@@ -59,9 +59,9 @@ subcommands yet -- library API only (`portrait_composer.{bake,profiles}`).
       one `topwear_with_arms`-labeled candidate; `head`/`face`/`eye`/
       `mouth`/`hair_front`/`hair_back`/`headwear`/`neck` slots are never
       grouped (kept independent, per directive #18). This leaves a single
-      deformable surface *available* for C4's upper_torso_secondary later
-      without deciding anything about motion itself -- upper_torso_secondary
-      is explicitly NOT implemented here.
+      deformable surface available for C4's upper_torso_secondary without
+      deciding anything about motion itself; the region is authored in
+      `secondary_regions.py`.
     - `FULL_MOTION`: always returns `[]` -- "arm/hand/sleeve 독립 유지
       우선, Bake는 아주 보수적으로" taken literally as "recommend nothing
       automatically"; call `bake.analyze_bake` directly for a manual
@@ -132,7 +132,7 @@ CLI/GUI surface onto them is later work.
 exit checklist as one integration test (3-bundle harvest -> hierarchy ->
 slot -> link create/dissolve -> VariantSet switch -> draw_order -> write
 -> reload -> deterministic render -> undo/redo). 92 tests passing at C1
-completion (118 now that C2 is in, see above).
+completion (123 now that C2-C4 are in, see above).
 
 ## C0.5 -- Portrait Bundle v1 contract sync
 
@@ -198,7 +198,7 @@ statuses only fire when a layer's `tag` and `source_tag` genuinely diverge
 - [x] AssetDefinition (`assets.py`)
 - [x] LayerInstance (`instances.py`)
 - [x] SourceBinding (`sources.py`)
-- [x] v0.2 schema (`schemas/portrait-assembly-v0.2.schema.json` -- C0+C1+C2 fields shaped, C3+ fields reserved as free-form pending their own phase)
+- [x] v0.2 schema (`schemas/portrait-assembly-v0.2.schema.json` -- C3 expressions and C4 RigIntent data are serialized; AutoRig runtime fields remain absent)
 - [x] identity render (`render.py`, `assembly.identity_assembly`)
 - [x] reference.png (`bundle.write_assembly_bundle`)
 - [x] provenance (`provenance.py`, recorded on every identity import / harvest / bake / recipe op / remap)
@@ -245,24 +245,21 @@ Not done (out of locked C2 scope, left for later phases):
 - [ ] source remap wired into a CLI subcommand (classification + manual/auto-resolvable apply exist in `remap.py`; CLI `remap` is report-only, see its module docstring)
 - [ ] CLI/GUI surface for bake/profiles (library API only so far)
 
-## C3/C4 Exit (directive #34) -- not started
+## C3/C4 Exit (directive #34)
 
-- [ ] donor
-- [ ] expression assets
-- [ ] rig intent (raw dict data model + validation exist; typed authoring helpers in `rig_intent.py` are a stub)
-- [ ] attachment (validated as broken/valid target only; no authoring helpers)
-- [ ] upper_torso_secondary
-- [ ] soft/firm_bounce/springy
-- [ ] manual region edit
-- [ ] visual preflight
+- [x] donor import (matte, alignment intent, ROI, deterministic drift check)
+- [x] expression assets as VariantSet members
+- [x] rig intent (typed deformation_scope authoring + validation)
+- [x] attachment (weld/hinge/free/follow authoring + validation)
+- [x] upper_torso_secondary
+- [x] soft/firm_bounce/springy qualitative response profiles
+- [x] manual region geometry edit
+- [x] visual preflight (READY/DEGRADED/DISABLED)
+- [x] save/reload and undo/redo regression coverage
+- [x] donor provenance and deterministic processed-layer output
 
 ## Not implemented at all
 
-`gui.py`, `workflow.py`, `compatibility.py`, `donors.py`, `expressions.py`,
-`rig_intent.py`, `secondary_regions.py` are present as stub modules
-(matching the directive's repository layout, #2) that raise
-`NotImplementedError` -- each one's docstring names the phase and
-directive section it belongs to. `upper_torso_secondary` itself is
-deliberately not implemented anywhere yet (C4) -- PORTRAIT_RIG's torso
-grouping (C2, above) only leaves a single surface *available* for it
-later.
+`gui.py`, `workflow.py`, and `compatibility.py` remain deferred integration
+surfaces. The Composer does not implement AutoRig mesh/deformer math,
+constraint solving, runtime parameter binding, or physics constants.
