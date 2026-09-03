@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portrait-composer/schemas/portrait-assembly-v0.2.schema.json",
+  "title": "Portrait Assembly Bundle manifest.json",
+  "description": "Directive ref: PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md #29-30. Only the C0 fields are strictly shaped; C1+ fields (hierarchy, variant_sets, links, rig_intent) are reserved as free-form objects until their owning phase lands, matching the directive's own incremental data-model lock.",
+  "type": "object",
+  "required": ["format", "version", "sources", "assets", "instances", "composition", "provenance"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "portrait-assembly" },
+    "version": { "const": "0.2" },
+
+    "sources": {
+      "type": "object",
+      "description": "source_id -> SourceAsset",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["source_id"],
+        "properties": {
+          "source_id": { "type": "string" },
+          "path": { "type": ["string", "null"] },
+          "metadata": { "type": "object" }
+        }
+      }
+    },
+
+    "assets": {
+      "type": "object",
+      "description": "asset id -> AssetDefinition (directive #5)",
+      "additionalProperties": { "$ref": "#/$defs/assetDefinition" }
+    },
+
+    "instances": {
+      "type": "object",
+      "description": "instance id -> LayerInstance (directive #6)",
+      "additionalProperties": { "$ref": "#/$defs/layerInstance" }
+    },
+
+    "hierarchy": { "type": "object", "description": "C1 -- reserved (directive #11)" },
+    "variant_sets": { "type": "object", "description": "C1 -- VariantSet map, id -> {mode, default, members} (directive #12)" },
+    "links": { "type": "object", "description": "C1 -- TransformLink map (directive #11)" },
+
+    "rig_intent": {
+      "type": "object",
+      "description": "C4 -- RigIntent (directive #21-23)",
+      "properties": {
+        "regions": { "type": "object" },
+        "attachments": { "type": "object" },
+        "deformation_scopes": { "type": "object" }
+      }
+    },
+
+    "composition": {
+      "type": "object",
+      "description": "Final draw order + canvas (directive #15)",
+      "properties": {
+        "draw_order": { "type": "array", "items": { "type": "string" } },
+        "canvas": {
+          "type": "object",
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+
+    "provenance": {
+      "type": "object",
+      "description": "target id -> ordered list of provenance records (directive #10, #16)",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["operation", "sources", "timestamp"],
+          "properties": {
+            "operation": { "type": "string" },
+            "sources": { "type": "array", "items": { "type": "string" } },
+            "timestamp": { "type": "number" }
+          }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "sourceBinding": {
+      "type": "object",
+      "required": ["source_id", "revision", "source_layer_id"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "revision": { "type": "string" },
+        "source_layer_id": { "type": "string" },
+        "fallback_semantic": { "type": ["string", "null"] }
+      }
+    },
+    "assetDefinition": {
+      "type": "object",
+      "required": ["id", "semantic"],
+      "properties": {
+        "id": { "type": "string" },
+        "semantic": { "type": "string" },
+        "source_binding": {
+          "oneOf": [{ "$ref": "#/$defs/sourceBinding" }, { "type": "null" }]
+        },
+        "planes": { "type": "array", "items": { "type": "string" } },
+        "compatibility": { "type": "object" },
+        "provenance": { "type": "object" }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "scale_x": { "type": "number" },
+        "scale_y": { "type": "number" },
+        "rotation": { "type": "number" }
+      }
+    },
+    "layerInstance": {
+      "type": "object",
+      "required": ["id", "asset_ref", "slot", "draw_order"],
+      "properties": {
+        "id": { "type": "string" },
+        "asset_ref": { "type": "string" },
+        "slot": { "type": "string" },
+        "draw_order": { "type": "integer" },
+        "visible": { "type": "boolean" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "transform": { "$ref": "#/$defs/transform" },
+        "transform_link": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
