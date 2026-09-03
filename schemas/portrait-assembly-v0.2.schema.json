@@ -105,7 +105,10 @@
         },
         "planes": { "type": "array", "items": { "type": "string" } },
         "compatibility": { "type": "object" },
-        "provenance": { "type": "object" }
+        "provenance": {
+          "type": "object",
+          "description": "C2 (bake.py) populates {derived_from: [{instance, asset, source_bundle}], operation, profile, timestamp, version} for a baked/derived asset; free-form and empty otherwise. See directive #16."
+        }
       }
     },
     "transform": {

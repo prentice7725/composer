@@ -65,7 +65,11 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
     for asset_id, asset in document.assets.items():
         sb = asset.source_binding
         if sb is None:
-            if production:
+            # a baked/derived asset (bake.py, C2) legitimately has no single
+            # upstream source_binding -- its provenance chain explains its
+            # origin instead. Only flag a *non*-derived asset here.
+            is_derived = bool(asset.provenance.get("derived_from"))
+            if production and not is_derived:
                 errors.append(f"asset {asset_id!r}: unresolved source binding (required for production export)")
             continue
         if sb.source_id not in document.sources:

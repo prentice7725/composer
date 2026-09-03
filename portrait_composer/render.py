@@ -11,11 +11,18 @@ This is intentionally a plain alpha-compositor -- no mesh/deformation/
 physics (directive final rule, #0 mission statement in both docs). Rotation
 support here is a flat 2D affine convenience for authoring preview; it is
 not a rig evaluator.
+
+``render_reference`` reads images from an on-disk ``layers/<instance_id>.png``
+convention (an already-written Assembly Bundle). ``render_subset`` (C2,
+bake.py's compositor) instead resolves images through a caller-given
+``image_sources``-style {instance_id: Path} map and an explicit instance
+list -- bake needs to composite a handful of not-yet-written source
+instances into one new image before any bundle exists on disk.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from PIL import Image
 
@@ -46,6 +53,34 @@ def _positioned(img: Image.Image, transform) -> tuple[Image.Image, tuple[int, in
     return img, (x, y)
 
 
+def _composite(
+    document: "AssemblyDocument",
+    instance_ids: list,
+    resolve_path: Callable[[str], Optional[Path]],
+    canvas_size: tuple,
+) -> Image.Image:
+    width, height = canvas_size
+    composite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+    for inst_id in instance_ids:
+        inst = document.instances.get(inst_id)
+        if inst is None or not inst.visible or inst.opacity <= 0.0:
+            continue
+        path = resolve_path(inst_id)
+        if path is None or not Path(path).exists():
+            raise FileNotFoundError(f"layer image missing for instance {inst_id!r}: {path}")
+        with Image.open(path) as im:
+            im = im.convert("RGBA")
+            if inst.opacity < 1.0:
+                r, g, b, a = im.split()
+                a = a.point(lambda v: round(v * inst.opacity))
+                im = Image.merge("RGBA", (r, g, b, a))
+            im, (x, y) = _positioned(im, inst.transform)
+            composite.alpha_composite(im, dest=(x, y))
+
+    return composite
+
+
 def render_reference(document: "AssemblyDocument", layers_dir: Path) -> Image.Image:
     canvas = document.composition.get("canvas") or {}
     width = canvas.get("width")
@@ -64,22 +99,18 @@ def render_reference(document: "AssemblyDocument", layers_dir: Path) -> Image.Im
     if width is None or height is None:
         width, height = 1, 1
 
-    composite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    return _composite(document, draw_order, lambda iid: layer_image_path(layers_dir, iid), (width, height))
 
-    for inst_id in draw_order:
-        inst = document.instances.get(inst_id)
-        if inst is None or not inst.visible or inst.opacity <= 0.0:
-            continue
-        path = layer_image_path(layers_dir, inst_id)
-        if not path.exists():
-            raise FileNotFoundError(f"layer image missing for instance {inst_id!r}: {path}")
-        with Image.open(path) as im:
-            im = im.convert("RGBA")
-            if inst.opacity < 1.0:
-                r, g, b, a = im.split()
-                a = a.point(lambda v: round(v * inst.opacity))
-                im = Image.merge("RGBA", (r, g, b, a))
-            im, (x, y) = _positioned(im, inst.transform)
-            composite.alpha_composite(im, dest=(x, y))
 
-    return composite
+def render_subset(document: "AssemblyDocument", image_sources: dict, instance_ids: list) -> Image.Image:
+    """Composites just ``instance_ids`` (in the given order), resolving each
+    one's image through ``image_sources`` ({instance_id: Path}) instead of
+    an on-disk ``layers/`` convention. Requires ``composition.canvas`` to
+    already be set -- bake operates on an already-imported/harvested
+    document, which always has one (C0.5/C1 both populate it)."""
+    canvas = document.composition.get("canvas") or {}
+    width, height = canvas.get("width"), canvas.get("height")
+    if width is None or height is None:
+        raise ValueError("render_subset requires document.composition['canvas'] to be set")
+
+    return _composite(document, instance_ids, lambda iid: image_sources.get(iid), (width, height))
