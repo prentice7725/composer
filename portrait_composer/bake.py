@@ -13,5 +13,5 @@ from __future__ import annotations
 def _not_implemented(*_args, **_kwargs):
     raise NotImplementedError(
         "bake.py is phase C2 scope (see module docstring); "
-        "not part of the C0 implementation."
+        "not part of the C0/C0.5/C1 implementation."
     )

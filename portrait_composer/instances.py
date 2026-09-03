@@ -7,6 +7,17 @@ Assets are never copied -- instances reference them by id (``asset_ref``).
 
 ``slot`` is a placement vocabulary term (see slots.py), not a semantic
 label -- see directive #13: "slot은 semantic이 아니다".
+
+``plane`` (C1, directive #14) says which of the asset's ``planes`` this
+instance renders, for a multi-plane AssetDefinition (e.g. one "uniform"
+asset with sleeve_back/torso/sleeve_front planes placed into three
+different slots by three different instances). ``None`` means "the
+asset's one and only plane" -- true for every C0/C0.5 identity-imported
+instance, since Portrait Bundle v1 layers are single-plane. It's bookkeeping
+only: which pixel content backs an instance is decided by whatever image
+ends up in that instance's ``image_sources`` entry at write time (harvest/
+bake), not derived from ``plane`` at render time -- see validation.py's
+plane-membership check and assembly.py's harvest/bake helpers.
 """
 from __future__ import annotations
 
@@ -61,6 +72,7 @@ class LayerInstance:
     opacity: float = 1.0
     transform: Transform = field(default_factory=Transform)
     transform_link: Optional[str] = None
+    plane: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +84,7 @@ class LayerInstance:
             "opacity": self.opacity,
             "transform": self.transform.to_dict(),
             "transform_link": self.transform_link,
+            "plane": self.plane,
         }
 
     @staticmethod
@@ -85,4 +98,5 @@ class LayerInstance:
             opacity=d.get("opacity", 1.0),
             transform=Transform.from_dict(d.get("transform", {})),
             transform_link=d.get("transform_link"),
+            plane=d.get("plane"),
         )

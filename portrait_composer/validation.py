@@ -5,17 +5,28 @@ Directive refs: PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md #30.
 Hard errors block commit (see document.py's transaction model). Warnings
 never block -- they're surfaced to the caller/CLI for review.
 
-Only the C0-era checks are wired up: missing source, missing asset, missing
-instance ref, duplicate stable id, invalid draw order ref, invalid
-VariantSet member, invalid rig target, broken attachment target, and (in
-``production`` mode) unresolved source binding. Occlusion/bake/secondary
-checks are C1+ and are documented as TODO stubs -- they need data
-(hierarchy, geometry, bake state) this phase does not populate yet.
+C0 checks: missing source, missing asset, missing instance ref, duplicate
+stable id, invalid draw order ref, invalid VariantSet member, invalid rig
+target, broken attachment target, and (in ``production`` mode) unresolved
+source binding.
+
+C1 checks (directive #11-14): hierarchy node/parent/ref/cycle integrity
+(hierarchy.py), instance.plane must be one of its asset's declared planes,
+transform_link two-way consistency (an instance's transform_link must name
+a link it's actually a member of, and vice versa), VariantSet active-member
+validity, and an unrecognized slot (soft -- slots.py's vocabulary is
+explicitly open).
+
+Occlusion/bake/secondary checks are C2+ and remain TODO stubs -- they need
+data (geometry, bake state) this phase does not populate yet.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from . import hierarchy as _hierarchy
+from .slots import is_known_slot
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -60,12 +71,43 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
         if sb.source_id not in document.sources:
             errors.append(f"asset {asset_id!r}: missing source {sb.source_id!r}")
 
-    # missing asset (instance -> asset_ref)
+    # missing asset (instance -> asset_ref); plane membership; slot vocabulary; transform_link
     for inst_id, inst in document.instances.items():
-        if inst.asset_ref not in document.assets:
+        asset = document.assets.get(inst.asset_ref)
+        if asset is None:
             errors.append(f"instance {inst_id!r}: missing asset {inst.asset_ref!r}")
-        if inst.transform_link and inst.transform_link not in document.links:
-            warnings.append(f"instance {inst_id!r}: transform_link {inst.transform_link!r} not defined")
+        elif inst.plane is not None and inst.plane not in asset.planes:
+            errors.append(
+                f"instance {inst_id!r}: plane {inst.plane!r} is not declared by asset "
+                f"{inst.asset_ref!r} (planes={asset.planes!r})"
+            )
+
+        if not is_known_slot(inst.slot):
+            warnings.append(f"instance {inst_id!r}: slot {inst.slot!r} is not in SLOT_VOCABULARY")
+
+        if inst.transform_link:
+            link = document.links.get(inst.transform_link)
+            if link is None:
+                warnings.append(f"instance {inst_id!r}: transform_link {inst.transform_link!r} not defined")
+            elif inst_id not in link.get("members", []):
+                errors.append(
+                    f"instance {inst_id!r}: transform_link {inst.transform_link!r} does not list it as a member"
+                )
+
+    # transform_link -> member consistency in the other direction
+    for link_id, link in document.links.items():
+        for member_id in link.get("members", []):
+            member = document.instances.get(member_id)
+            if member is None:
+                errors.append(f"link {link_id!r}: member {member_id!r} is not an instance")
+            elif member.transform_link != link_id:
+                errors.append(
+                    f"link {link_id!r}: member {member_id!r}.transform_link is "
+                    f"{member.transform_link!r}, not {link_id!r}"
+                )
+
+    # hierarchy integrity (hierarchy.py)
+    errors.extend(_hierarchy.validate_hierarchy(document))
 
     # invalid draw order ref / missing instance ref
     draw_order = document.composition.get("draw_order", [])
@@ -89,6 +131,9 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
         default = vs.get("default")
         if default is not None and default not in members:
             errors.append(f"variant_set {vs_id!r}: default {default!r} not in members")
+        active = vs.get("active")
+        if active is not None and active not in members:
+            errors.append(f"variant_set {vs_id!r}: active {active!r} not in members")
 
     # rig intent: regions/attachments must target real instances or slots
     rig_intent = document.rig_intent or {}

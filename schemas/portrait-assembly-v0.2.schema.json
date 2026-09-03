@@ -36,9 +36,9 @@
       "additionalProperties": { "$ref": "#/$defs/layerInstance" }
     },
 
-    "hierarchy": { "type": "object", "description": "C1 -- reserved (directive #11)" },
-    "variant_sets": { "type": "object", "description": "C1 -- VariantSet map, id -> {mode, default, members} (directive #12)" },
-    "links": { "type": "object", "description": "C1 -- TransformLink map (directive #11)" },
+    "hierarchy": { "type": "object", "description": "C1 -- {nodes: {node_id -> {parent, ref, label}}, children: {parent_id_or_\"\" -> [node_id,...]}} (directive #11, hierarchy.py)" },
+    "variant_sets": { "type": "object", "description": "C1 -- VariantSet map, id -> {mode, default, active, members} (directive #12, variants.py)" },
+    "links": { "type": "object", "description": "C1 -- TransformLink map, id -> {members: [instance_id,...]} (directive #11, links.py)" },
 
     "rig_intent": {
       "type": "object",
@@ -129,7 +129,8 @@
         "visible": { "type": "boolean" },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
         "transform": { "$ref": "#/$defs/transform" },
-        "transform_link": { "type": ["string", "null"] }
+        "transform_link": { "type": ["string", "null"] },
+        "plane": { "type": ["string", "null"], "description": "C1 -- which of asset_ref's declared planes this instance renders (directive #14)" }
       }
     }
   }
