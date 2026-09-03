@@ -37,17 +37,18 @@
     },
 
     "hierarchy": { "type": "object", "description": "C1 -- {nodes: {node_id -> {parent, ref, label}}, children: {parent_id_or_\"\" -> [node_id,...]}} (directive #11, hierarchy.py)" },
-    "variant_sets": { "type": "object", "description": "C1 -- VariantSet map, id -> {mode, default, active, members} (directive #12, variants.py)" },
-    "expressions": { "type": "object", "description": "C3 -- thin ExpressionPreset map over VariantSets; no runtime parameter binding" },
+    "variant_sets": { "type": "object", "additionalProperties": { "$ref": "#/$defs/variantSet" }, "description": "C1 -- VariantSet map, id -> {mode, default, active, members} (directive #12, variants.py)" },
+    "expressions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/expressionPreset" }, "description": "C3 -- thin ExpressionPreset map over VariantSets; no runtime parameter binding" },
     "links": { "type": "object", "description": "C1 -- TransformLink map, id -> {members: [instance_id,...]} (directive #11, links.py)" },
 
     "rig_intent": {
       "type": "object",
       "description": "C4 -- RigIntent (directive #21-23)",
+      "additionalProperties": false,
       "properties": {
-        "regions": { "type": "object" },
-        "attachments": { "type": "object" },
-        "deformation_scopes": { "type": "object" }
+        "regions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/secondaryRegion" } },
+        "attachments": { "type": "object", "additionalProperties": { "$ref": "#/$defs/attachmentIntent" } },
+        "deformation_scopes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/deformationScope" } }
       }
     },
 
@@ -110,6 +111,82 @@
           "type": "object",
           "description": "C2 (bake.py) populates {derived_from: [{instance, asset, source_bundle}], operation, profile, timestamp, version} for a baked/derived asset; free-form and empty otherwise. See directive #16."
         }
+      }
+    },
+    "deformationScope": {
+      "type": "string",
+      "enum": ["baked", "rigid", "local", "independent", "secondary"]
+    },
+    "attachmentIntent": {
+      "type": "object",
+      "required": ["child", "target", "mode"],
+      "additionalProperties": false,
+      "properties": {
+        "child": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "mode": { "type": "string", "enum": ["weld", "hinge", "free", "follow"] }
+      }
+    },
+    "lobe": {
+      "type": "object",
+      "required": ["center", "radius"],
+      "additionalProperties": false,
+      "properties": {
+        "center": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } },
+        "radius": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "exclusiveMinimum": 0 } }
+      }
+    },
+    "twoLobeGeometry": {
+      "type": "object",
+      "required": ["kind", "left", "right"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "two_lobe" },
+        "left": { "$ref": "#/$defs/lobe" },
+        "right": { "$ref": "#/$defs/lobe" }
+      }
+    },
+    "secondaryRegion": {
+      "type": "object",
+      "required": ["target", "geometry", "locks", "author_strength", "response_profile", "enabled"],
+      "additionalProperties": true,
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "geometry": { "$ref": "#/$defs/twoLobeGeometry" },
+        "locks": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 },
+          "properties": {
+            "center": { "type": "number", "minimum": 0, "maximum": 1 },
+            "neckline": { "type": "number", "minimum": 0, "maximum": 1 },
+            "shoulder": { "type": "number", "minimum": 0, "maximum": 1 },
+            "lower_falloff": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "exclusions": { "type": "array" },
+        "author_strength": { "type": "number", "minimum": 0, "maximum": 1 },
+        "response_profile": { "type": "string", "enum": ["soft", "firm_bounce", "springy"] },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "variantSet": {
+      "type": "object",
+      "required": ["mode", "members"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string", "enum": ["exclusive"] },
+        "default": { "type": "string" },
+        "active": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "expressionPreset": {
+      "type": "object",
+      "required": ["variants"],
+      "additionalProperties": true,
+      "properties": {
+        "variants": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } },
+        "metadata": { "type": "object" }
       }
     },
     "transform": {

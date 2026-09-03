@@ -319,6 +319,11 @@ def read_assembly_bundle(path: Path) -> AssemblyDocument:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("format") != ASSEMBLY_FORMAT:
         raise BundleError(f"unexpected format in {manifest_path}: {manifest.get('format')!r}")
+    if manifest.get("version") != ASSEMBLY_VERSION:
+        raise BundleError(
+            f"unsupported assembly version in {manifest_path}: {manifest.get('version')!r}; "
+            f"this Composer reads exactly {ASSEMBLY_VERSION!r}"
+        )
     return AssemblyDocument.from_dict(manifest)
 
 

@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from . import bake as _bake
+from .rig_intent import is_rig_protected_semantic
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -103,7 +104,12 @@ def _analyze_rig(document: "AssemblyDocument") -> list:
     torso_ids = [
         inst_id
         for inst_id, inst in document.instances.items()
-        if inst.visible and inst.slot in _RIG_TORSO_SLOTS and inst_id not in protected
+        if (
+            inst.visible
+            and inst.slot in _RIG_TORSO_SLOTS
+            and inst_id not in protected
+            and not is_rig_protected_semantic(document.assets[inst.asset_ref].semantic)
+        )
     ]
     torso_ids.sort(key=lambda i: document.instances[i].draw_order)
     candidate = _candidate(document, "topwear_with_arms", torso_ids)

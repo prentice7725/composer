@@ -64,6 +64,7 @@ class AssemblyDocument:
         self.composition: dict = {"draw_order": [], "canvas": {}}
         self.provenance = ProvenanceLog()
         self.history = HistoryManager()
+        self._transaction_depth = 0
 
     # ------------------------------------------------------------------
     # mutation primitives -- intended to be called from inside a
@@ -94,13 +95,22 @@ class AssemblyDocument:
     # ------------------------------------------------------------------
     @contextmanager
     def transaction(self, production: bool = False) -> Iterator["AssemblyDocument"]:
+        outermost = self._transaction_depth == 0
         snapshot_before = self.to_dict()
+        self._transaction_depth += 1
         try:
             yield self
         except Exception:
+            self._transaction_depth -= 1
             self._restore(snapshot_before)
             raise
 
+        self._transaction_depth -= 1
+        # Public authoring helpers may be called inside an existing
+        # transaction. Nested scopes share the outer atomic history entry;
+        # only the outermost scope validates and records undo state.
+        if not outermost:
+            return
         result = _validate(self, production=production)
         if not result.ok:
             self._restore(snapshot_before)
@@ -141,6 +151,10 @@ class AssemblyDocument:
 
     def mark_saved(self) -> int:
         return self.history.mark_saved()
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._transaction_depth > 0
 
     # ------------------------------------------------------------------
     def validate(self, production: bool = False) -> ValidationResult:

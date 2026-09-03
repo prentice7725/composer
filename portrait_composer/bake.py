@@ -44,6 +44,7 @@ from typing import Optional, TYPE_CHECKING
 from .assets import AssetDefinition
 from .instances import LayerInstance, Transform
 from .render import render_subset
+from .rig_intent import is_rig_protected_semantic
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -99,7 +100,17 @@ def _rig_intent_reasons(document: "AssemblyDocument", instance_ids: list) -> lis
     # It is a Composer analysis label, not a new slot or a physics object, but
     # authors may use that stable logical name for one scope declaration.
     logical_refs = set()
-    if len(instance_ids) >= 2 and slot_names and slot_names <= {"torso_back", "torso", "torso_front"}:
+    selected_semantics = {
+        document.assets[document.instances[i].asset_ref].semantic
+        for i in instance_ids
+        if i in document.instances and document.instances[i].asset_ref in document.assets
+    }
+    if (
+        len(instance_ids) >= 2
+        and slot_names
+        and slot_names <= {"torso_back", "torso", "torso_front"}
+        and not any(is_rig_protected_semantic(semantic) for semantic in selected_semantics)
+    ):
         logical_refs.add("topwear_with_arms")
 
     checked_any = False

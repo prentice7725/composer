@@ -27,6 +27,9 @@ def _doc(tmp_path: Path):
     # vocabulary, matching how a C1 authoring step would place these --
     # profiles.py's grouping is slot-driven, not tag-driven.
     with document.transaction():
+        # Keep the fixture's back torso plane eligible; semantic neck is
+        # intentionally protected even when manually placed in torso_back.
+        document.assets["neck"].semantic = "body"
         set_slot(document, "neck__instance", "neck")
         set_slot(document, "topwear__instance", "torso")
         set_slot(document, "head__instance", "head")
@@ -80,6 +83,15 @@ def test_portrait_rig_groups_torso_slots_keeps_head_independent(tmp_path: Path):
     assert candidates[0].label == "topwear_with_arms"
     assert set(candidates[0].instance_ids) == {"neck__instance", "topwear__instance"}
     assert "head__instance" not in candidates[0].instance_ids  # head slot kept independent
+
+
+def test_portrait_rig_semantic_protection_cannot_be_bypassed_by_reslot(tmp_path: Path):
+    document, _ = _doc(tmp_path)
+    with document.transaction():
+        document.assets["neck"].semantic = "neck"
+        set_slot(document, "neck__instance", "torso_back")
+    candidates = analyze_profile(document, PORTRAIT_RIG)
+    assert candidates == []
 
 
 def test_portrait_rig_recommends_nothing_when_only_one_torso_instance(tmp_path: Path):

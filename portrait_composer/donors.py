@@ -144,8 +144,18 @@ def check_drift(
     *,
     alignment: dict | Transform | None = None,
     tolerance: float = 0.0,
+    target_roi: Any = None,
+    target_size: tuple[int, int] | None = None,
+    target_anchor: tuple[float, float] | None = None,
+    target_rotation: float = 0.0,
+    target_drift_tolerance: float = 0.15,
 ) -> DriftReport:
-    """Validate deterministic crop/alignment bounds without guessing semantics."""
+    """Validate bounds and, when supplied, donor-to-target alignment drift.
+
+    Bounds checks remain useful without a target.  Passing ``target_roi`` or
+    ``target_anchor`` enables a deterministic comparison of placed ROI center,
+    size, and rotation; this is still authoring QA, not image understanding.
+    """
     width, height = image_size
     reasons: list[str] = []
     metrics: dict[str, Any] = {"image_size": [width, height]}
@@ -166,6 +176,45 @@ def check_drift(
             reasons.append(f"alignment.{key} must be finite")
     if transform.get("scale_x", 1) <= 0 or transform.get("scale_y", 1) <= 0:
         reasons.append("alignment scale must be positive")
+    if target_roi is not None or target_anchor is not None:
+        if box is None:
+            reasons.append("target alignment drift requires a donor ROI")
+        else:
+            target_size = target_size or image_size
+            target_box = _bbox(target_roi, target_size) if target_roi is not None else None
+            donor_cx = (box[0] + box[2]) / 2
+            donor_cy = (box[1] + box[3]) / 2
+            scale_x = float(transform.get("scale_x", 1.0))
+            scale_y = float(transform.get("scale_y", 1.0))
+            placed_center = (
+                float(transform.get("x", 0.0)) + donor_cx * scale_x,
+                float(transform.get("y", 0.0)) + donor_cy * scale_y,
+            )
+            if target_box is not None:
+                target_center = ((target_box[0] + target_box[2]) / 2, (target_box[1] + target_box[3]) / 2)
+                target_width = max(1, target_box[2] - target_box[0])
+                target_height = max(1, target_box[3] - target_box[1])
+                center_delta_norm = (((placed_center[0] - target_center[0]) / target_width) ** 2 + ((placed_center[1] - target_center[1]) / target_height) ** 2) ** 0.5
+                scale_ratio = [((box[2] - box[0]) * scale_x) / target_width, ((box[3] - box[1]) * scale_y) / target_height]
+                overlap = max(0, min(box[2], target_box[2]) - max(box[0], target_box[0])) * max(0, min(box[3], target_box[3]) - max(box[1], target_box[1]))
+                union = (box[2] - box[0]) * (box[3] - box[1]) + target_width * target_height - overlap
+                metrics.update({"center_delta_norm": center_delta_norm, "scale_ratio": scale_ratio, "roi_overlap": overlap / union if union else 0.0})
+                if center_delta_norm > target_drift_tolerance:
+                    reasons.append(f"target ROI center drift is {center_delta_norm:.3f}")
+                if any(abs(ratio - 1.0) > target_drift_tolerance for ratio in scale_ratio):
+                    reasons.append(f"target ROI scale drift is {scale_ratio!r}")
+            elif target_anchor is not None:
+                anchor_x, anchor_y = target_anchor
+                target_w, target_h = target_size
+                center_delta_norm = (((placed_center[0] - anchor_x) / max(1, target_w)) ** 2 + ((placed_center[1] - anchor_y) / max(1, target_h)) ** 2) ** 0.5
+                metrics["center_delta_norm"] = center_delta_norm
+                if center_delta_norm > target_drift_tolerance:
+                    reasons.append(f"target anchor drift is {center_delta_norm:.3f}")
+            rotation_delta = abs(float(transform.get("rotation", 0.0)) - float(target_rotation)) % 360
+            rotation_delta = min(rotation_delta, 360 - rotation_delta)
+            metrics["rotation_delta"] = rotation_delta
+            if rotation_delta > 15:
+                reasons.append(f"target rotation drift is {rotation_delta:.1f} degrees")
     if reasons:
         return DriftReport("FAIL", reasons, metrics)
     return DriftReport("PASS", [], metrics)
@@ -207,6 +256,11 @@ def import_donor(
     draw_order: int | None = None,
     variant_set_id: str | None = None,
     variant_set: str | None = None,
+    target_roi: Any = None,
+    target_size: tuple[int, int] | None = None,
+    target_anchor: tuple[float, float] | None = None,
+    target_rotation: float = 0.0,
+    target_drift_tolerance: float = 0.15,
     image_sources: dict | None = None,
     work_dir: Path | None = None,
 ) -> DonorImportResult:
@@ -230,7 +284,17 @@ def import_donor(
         source_image = source_image.convert("RGBA")
         processed = _apply_matte(source_image, matte)
         processed = _apply_operations(processed, operations)
-        drift = check_drift(processed.size, roi, alignment=alignment, tolerance=drift_tolerance)
+        drift = check_drift(
+            processed.size,
+            roi,
+            alignment=alignment,
+            tolerance=drift_tolerance,
+            target_roi=target_roi,
+            target_size=target_size,
+            target_anchor=target_anchor,
+            target_rotation=target_rotation,
+            target_drift_tolerance=target_drift_tolerance,
+        )
         if not drift.ok and not allow_drift:
             raise DonorDriftError("; ".join(drift.reasons))
         box = _bbox(roi, processed.size)
@@ -251,6 +315,8 @@ def import_donor(
         "matte": str(matte) if isinstance(matte, (str, Path)) else bool(matte is not None),
         "alignment_transform": transform,
         "semantic_roi": dict(roi) if isinstance(roi, dict) else roi,
+        "target_roi": dict(target_roi) if isinstance(target_roi, dict) else target_roi,
+        "target_anchor": list(target_anchor) if target_anchor is not None else None,
         "operations": list(operations or []),
         "drift": drift.to_dict(),
     }

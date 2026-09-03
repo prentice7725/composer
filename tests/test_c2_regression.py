@@ -39,6 +39,9 @@ def test_c2_full_pipeline(tmp_path: Path):
     document, image_sources, _ = identity_assembly(bundle)
 
     with document.transaction():
+        # The source layer is named neck, but this profile fixture uses it as
+        # a generic back-torso plane. PORTRAIT_RIG protects semantic neck.
+        document.assets["neck"].semantic = "body"
         set_slot(document, "neck__instance", "torso_back")
         set_slot(document, "topwear__instance", "torso")
         set_slot(document, "head__instance", "head")

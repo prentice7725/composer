@@ -24,6 +24,14 @@ class SecondaryRegionError(ValueError):
     pass
 
 
+def _run_authoring(document: "AssemblyDocument", operation):
+    """Commit one public edit, while composing cleanly inside outer edits."""
+    if document.in_transaction:
+        return operation()
+    with document.transaction():
+        return operation()
+
+
 def default_two_lobe_geometry() -> dict:
     """Return the deterministic normalized starter geometry from the directive."""
     return {
@@ -102,15 +110,17 @@ def add_region(
     """Add an authored region to ``document.rig_intent``."""
     if not region_id:
         raise SecondaryRegionError("region id must be non-empty")
-    intent = document.rig_intent
-    intent.setdefault("regions", {})
-    if region_id in intent["regions"]:
-        raise SecondaryRegionError(f"secondary region id already exists: {region_id!r}")
     region = make_region(
         target=target, geometry=geometry, locks=locks, exclusions=exclusions,
         author_strength=author_strength, response_profile=response_profile, enabled=enabled,
     )
-    intent["regions"][region_id] = region
+    def mutate():
+        intent = document.rig_intent
+        intent.setdefault("regions", {})
+        if region_id in intent["regions"]:
+            raise SecondaryRegionError(f"secondary region id already exists: {region_id!r}")
+        intent["regions"][region_id] = region
+    _run_authoring(document, mutate)
     return region
 
 
@@ -134,22 +144,24 @@ def add_upper_torso_secondary(
 
 
 def update_region(document: "AssemblyDocument", region_id: str, **changes: Any) -> dict:
-    regions = document.rig_intent.get("regions", {})
-    if region_id not in regions:
+    if region_id not in document.rig_intent.get("regions", {}):
         raise SecondaryRegionError(f"no such secondary region: {region_id!r}")
-    current = dict(regions[region_id])
-    current.update(changes)
-    updated = make_region(
-        target=current["target"], geometry=current.get("geometry"), locks=current.get("locks"),
-        exclusions=current.get("exclusions"), author_strength=current.get("author_strength", 0.9),
-        response_profile=current.get("response_profile", "soft"), enabled=current.get("enabled", True),
-    )
-    # Preserve optional authoring diagnostics/metadata such as explicit
-    # neckline intrusion or overlay coverage when only geometry is edited.
-    known = {"target", "geometry", "locks", "exclusions", "author_strength", "response_profile", "enabled"}
-    updated = {**{k: v for k, v in current.items() if k not in known}, **updated}
-    regions[region_id] = updated
-    return updated
+    def mutate():
+        regions = document.rig_intent["regions"]
+        current = dict(regions[region_id])
+        current.update(changes)
+        updated = make_region(
+            target=current["target"], geometry=current.get("geometry"), locks=current.get("locks"),
+            exclusions=current.get("exclusions"), author_strength=current.get("author_strength", 0.9),
+            response_profile=current.get("response_profile", "soft"), enabled=current.get("enabled", True),
+        )
+        # Preserve optional authoring diagnostics/metadata such as explicit
+        # neckline intrusion or overlay coverage when only geometry is edited.
+        known = {"target", "geometry", "locks", "exclusions", "author_strength", "response_profile", "enabled"}
+        updated = {**{k: v for k, v in current.items() if k not in known}, **updated}
+        regions[region_id] = updated
+        return updated
+    return _run_authoring(document, mutate)
 
 
 def set_geometry(document: "AssemblyDocument", region_id: str, geometry: dict) -> dict:
@@ -157,10 +169,9 @@ def set_geometry(document: "AssemblyDocument", region_id: str, geometry: dict) -
 
 
 def remove_region(document: "AssemblyDocument", region_id: str) -> None:
-    regions = document.rig_intent.get("regions", {})
-    if region_id not in regions:
+    if region_id not in document.rig_intent.get("regions", {}):
         raise SecondaryRegionError(f"no such secondary region: {region_id!r}")
-    del regions[region_id]
+    _run_authoring(document, lambda: document.rig_intent["regions"].__delitem__(region_id))
 
 
 @dataclass
