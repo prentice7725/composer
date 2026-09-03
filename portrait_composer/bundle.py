@@ -25,9 +25,15 @@ invent. Summary of what a reader must do, per that spec:
 - every canonical layer tag must appear in `semantics.z_order`, which is
   the producer's *reconstruction* order, not a downstream draw order --
   Composer only uses it to seed each LayerInstance's initial `draw_order`;
-- rig-specific subdivisions (`head_remainder`, `neck_remainder`, or any
-  other `*_remainder` besides `body_remainder`) are forbidden in the
-  canonical layer set;
+- rig-specific subdivisions (`head_remainder`, `neck_remainder`) are
+  forbidden in the canonical layer set -- an explicit denylist, not a
+  `*_remainder` wildcard: `body_remainder` is itself a canonical producer
+  tag (SEMANTIC_Z_ORDER's first entry upstream), and native sided semantic
+  tags (`eyel`/`eyer`, `earl`/`earr`, `eyewhitel`/`eyewhiter`,
+  `iridesl`/`iridesr`, `eyelashl`/`eyelashr`, `eyebrowl`/`eyebrowr`, ...)
+  are legitimate producer content, not the "left/right eye splits" the
+  spec prose means to ban -- see PORTRAIT_BUNDLE_V1.md's note reconciling
+  this;
 - `generation` (seed_mode/attempt_index/seed/canonical_regression_seed/
   source_identity) is reproducibility provenance and is preserved onto the
   registered SourceAsset + every provenance record, not discarded;
@@ -74,9 +80,12 @@ _REQUIRED_CANVAS = {
 _CANONICAL_STAGE = "production_repaired"
 
 # Rig-specific subdivisions are forbidden in the canonical layer set
-# (PORTRAIT_BUNDLE_V1.md). "body_remainder" is the one sanctioned
-# *_remainder tag (unresolved semantic-ownership residual); any other
-# *_remainder is a rig-only subdivision that must never reach layers/.
+# (PORTRAIT_BUNDLE_V1.md) -- an explicit denylist, not a "*_remainder"
+# wildcard: "body_remainder" is itself a canonical producer tag (unresolved
+# semantic-ownership residual, first entry of SEMANTIC_Z_ORDER upstream),
+# and nothing rules out the producer sanctioning another *_remainder tag
+# later. Only these two are known Composer/AutoRig-invented rig-specific
+# subdivisions today; extend this set, don't wildcard it.
 _FORBIDDEN_TAGS = {"head_remainder", "neck_remainder"}
 
 # Above this measured disocclusion_risk, an occlusion_graph.json edge is
@@ -210,7 +219,7 @@ def read_portrait_bundle(path: Path) -> PortraitBundle:
     layers_raw = dict(_require(manifest, "layers", manifest_path))
     layers: list[PortraitBundleLayer] = []
     for tag, entry in layers_raw.items():
-        if tag in _FORBIDDEN_TAGS or (tag.endswith("_remainder") and tag != "body_remainder"):
+        if tag in _FORBIDDEN_TAGS:
             raise BundleError(
                 f"{manifest_path}: canonical layer {tag!r} is a rig-specific subdivision "
                 "forbidden in the canonical layer set (PORTRAIT_BUNDLE_V1.md)"

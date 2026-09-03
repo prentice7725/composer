@@ -93,6 +93,19 @@ def test_rejects_forbidden_rig_specific_layer_tags(tmp_path: Path, tag):
         read_portrait_bundle(root)
 
 
+def test_body_remainder_is_a_canonical_tag_not_forbidden(tmp_path: Path):
+    """body_remainder is itself canonical (SEMANTIC_Z_ORDER's first entry
+    upstream, unresolved semantic-ownership residual) -- the forbidden set
+    is an explicit rig-specific denylist, not a '*_remainder' wildcard."""
+    root = make_portrait_bundle(
+        tmp_path / "a.portrait",
+        layers=[("body_remainder", (7, 7, 7, 255)), ("head", (4, 5, 6, 255))],
+        z_order_override=["body_remainder", "head"],
+    )
+    bundle = read_portrait_bundle(root)
+    assert {l.tag for l in bundle.layers} == {"body_remainder", "head"}
+
+
 def test_legitimate_left_right_semantic_splits_are_not_forbidden(tmp_path: Path):
     """eyel/eyer etc. are real SEMANTIC_Z_ORDER content splits (two visible
     eyes), not the rig-specific subdivisions the contract bans -- they must
