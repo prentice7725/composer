@@ -129,10 +129,19 @@ class AssemblyTreeFilter(QSortFilterProxyModel):
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setFilterKeyColumn(0)
         self.mode = "All"
+        self.selected_source: str | None = None
 
     def set_filter_mode(self, mode: str) -> None:
         self.mode = mode or "All"
-        self.invalidateFilter()
+        self._refresh_filter()
+
+    def set_selected_source(self, source: str | None) -> None:
+        self.selected_source = source
+        self._refresh_filter()
+
+    def _refresh_filter(self) -> None:
+        self.beginFilterChange()
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
         if not super().filterAcceptsRow(source_row, source_parent):
@@ -143,7 +152,10 @@ class AssemblyTreeFilter(QSortFilterProxyModel):
         item = model.itemFromIndex(model.index(source_row, 0, source_parent))
         metadata = item.data(META_ROLE) or {}
         return {
-            "Selected Source": metadata.get("source") != "derived",
+            "Selected Source": (
+                self.selected_source is not None
+                and metadata.get("source") == self.selected_source
+            ),
             "Variants": bool(metadata.get("variant_sets")),
             "Warnings": bool(item.data(WARNING_ROLE)),
             "Rig-enabled": bool(metadata.get("rig")),

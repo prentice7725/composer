@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..commands import nudge_draw_order, reorder_draw_order, set_instance_visible
-from ..models.assembly_tree import AssemblyTreeFilter, AssemblyTreeModel, INSTANCE_ROLE
+from ..models.assembly_tree import AssemblyTreeFilter, AssemblyTreeModel, INSTANCE_ROLE, META_ROLE
 
 
 class _ReorderTreeView(QTreeView):
@@ -94,6 +94,14 @@ class TreeDock(QDockWidget):
             self.selection_model.select(str(instance_id))
 
     def _refresh_selection(self, selected_ids: list[str]) -> None:
+        selected_sources = set()
+        for row in range(self.model.rowCount()):
+            item = self.model.item(row)
+            if item.data(INSTANCE_ROLE) in selected_ids:
+                source = (item.data(META_ROLE) or {}).get("source")
+                if source:
+                    selected_sources.add(source)
+        self.proxy.set_selected_source(next(iter(selected_sources)) if len(selected_sources) == 1 else None)
         self.tree.clearSelection()
         for row in range(self.proxy.rowCount()):
             index = self.proxy.index(row, 0)

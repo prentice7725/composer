@@ -90,7 +90,9 @@ class CanvasView(QGraphicsView):
             additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             self.selection_model.select(str(instance_id), additive=additive)
             if not additive and self.scene_model.gizmo.instance_id == instance_id:
-                self.scene_model.gizmo.begin_drag(("move", None), scene_pos)
+                role = self._body_drag_role()
+                if role is not None:
+                    self.scene_model.gizmo.begin_drag(role, scene_pos)
             event.accept()
             return
         self.selection_model.clear()
@@ -157,6 +159,10 @@ class CanvasView(QGraphicsView):
             )
         )
 
+    def _body_drag_role(self) -> tuple[str, None] | None:
+        tool = getattr(self.session, "canvas_tool", "select")
+        return None if tool == "select" else (tool, None)
+
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
@@ -203,12 +209,6 @@ class CanvasView(QGraphicsView):
             self.scene_model.donor_ghost.cancel_drag()
             event.accept()
             return
-        if event.key() == Qt.Key.Key_Escape:
-            cancel = getattr(window, "cancel_pending_operation", None)
-            if cancel is not None:
-                cancel()
-                event.accept()
-                return
         if event.key() == Qt.Key.Key_Escape and self.scene_model.region_edit.drag is not None:
             self.scene_model.region_edit.cancel_drag()
             event.accept()
@@ -217,6 +217,12 @@ class CanvasView(QGraphicsView):
             self.scene_model.gizmo.cancel_drag()
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Escape:
+            cancel = getattr(window, "cancel_pending_operation", None)
+            if cancel is not None:
+                cancel()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat() and not self._space_panning:
             self._space_panning = True
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)

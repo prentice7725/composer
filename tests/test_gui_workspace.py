@@ -8,12 +8,14 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
+from PySide6.QtGui import QKeyEvent, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QApplication
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle
 from portrait_composer.ui.main_window import MainWindow
+from portrait_composer.ui.models.assembly_tree import AssemblyTreeFilter, META_ROLE, WARNING_ROLE
 
 
 @pytest.fixture(scope="module")
@@ -110,4 +112,56 @@ def test_save_is_blocked_before_writing_an_invalid_document(qapp, portrait_bundl
     assert window._write_bundle(target) is False
     assert not target.exists()
     assert "Save blocked" in window.statusBar().currentMessage()
+    window.close()
+
+
+def test_selected_source_filter_matches_only_the_selected_source(qapp):
+    source_model = QStandardItemModel()
+    for instance_id, source in (("head__instance", "seed-a"), ("mouth__instance", "seed-b")):
+        item = QStandardItem(instance_id)
+        item.setData({"source": source, "variant_sets": []}, META_ROLE)
+        item.setData(0, WARNING_ROLE)
+        source_model.appendRow(item)
+    proxy = AssemblyTreeFilter()
+    proxy.setSourceModel(source_model)
+    proxy.set_filter_mode("Selected Source")
+    proxy.set_selected_source("seed-b")
+
+    assert proxy.rowCount() == 1
+    assert proxy.index(0, 0).data() == "mouth__instance"
+
+
+def test_canvas_tool_shortcuts_change_the_next_body_drag_operation(qapp, tmp_path: Path):
+    window = MainWindow(settings=_settings(tmp_path / "tools.ini"))
+    view = window.canvas
+    for key, expected in (
+        (Qt.Key.Key_V, None),
+        (Qt.Key.Key_G, ("move", None)),
+        (Qt.Key.Key_R, ("rotate", None)),
+        (Qt.Key.Key_S, ("scale", None)),
+    ):
+        view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
+        assert view._body_drag_role() == expected
+    window.close()
+
+
+def test_escape_cancels_gizmo_before_generic_pending_cancel(qapp, portrait_bundle: Path, tmp_path: Path):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    window = MainWindow(settings=_settings(tmp_path / "escape.ini"))
+    window._display_document(document, image_sources, portrait_bundle, source_map=True, import_warnings=warnings)
+    instance_id = next(iter(document.instances))
+    window.selection_model.select(instance_id)
+    gizmo = window.canvas.scene_model.gizmo
+    gizmo.begin_drag(("move", None), QPointF(0.0, 0.0))
+    assert gizmo.drag is not None
+    generic_called = []
+    window.cancel_pending_operation = lambda: generic_called.append(True)
+
+    window.canvas.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    )
+
+    assert gizmo.drag is None
+    assert generic_called == []
     window.close()
