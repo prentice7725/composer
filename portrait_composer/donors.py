@@ -261,14 +261,21 @@ def _expression_state(semantic: str, kind: str) -> str:
 
 
 def _normalized_slot(semantic: str, *, kind: str | None = None, target_slot: str | None = None) -> str:
+    normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
+    # Expression donors belong to the head/face feature pipeline even when
+    # the selected replacement target was authored with a broad torso/body
+    # slot.  Never let that target slot leak into an eye or mouth donor.
+    if kind == "eyes":
+        return "eye"
+    if kind == "mouth":
+        return "mouth"
     if target_slot and is_known_slot(target_slot):
         return target_slot
-    normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized == "body_remainder":
         return "body_back"
-    if kind == "eyes" or normalized in {"eye", "eyes", "eyewhite", "irides", "iris", "eyelash"}:
+    if normalized in {"eye", "eyes", "eyewhite", "irides", "iris", "eyelash"}:
         return "eye"
-    if kind == "mouth" or normalized in {"mouth", "mouth_closed", "mouth_neutral", "mouth_open"}:
+    if normalized in {"mouth", "mouth_closed", "mouth_neutral", "mouth_open"}:
         return "mouth"
     if normalized in {"neck"}:
         return "neck"
@@ -281,6 +288,33 @@ def _normalized_slot(semantic: str, *, kind: str | None = None, target_slot: str
     if normalized in {"handwear", "hand_overlay", "sleeve", "arm"} or normalized.startswith(("handwear_", "hand_overlay_", "sleeve_", "arm_")):
         return "torso_front"
     return semantic
+
+
+def _expression_plane(document: "AssemblyDocument", kind: str, target_instance_id: str | None) -> str:
+    """Resolve the authored depth/shell plane for an expression donor.
+
+    A donor image is a new AssetDefinition, so its plane namespace must be
+    copied deliberately; ``plane=None`` would otherwise discard the source
+    facial plane while leaving the donor looking superficially correct in
+    the 2D Composer preview.  A body/torso target is not a valid expression
+    plane source and falls back to the canonical facial plane.
+    """
+    target = document.instances.get(target_instance_id) if target_instance_id else None
+    if target is not None:
+        target_asset = document.assets.get(target.asset_ref)
+        target_semantic = target_asset.semantic if target_asset is not None else ""
+        target_is_expression = expression_donor_kind(target_semantic) == kind or target.slot in {"eye", "mouth"}
+        if target_is_expression:
+            if target.plane:
+                return target.plane
+            target_planes = list(target_asset.planes) if target_asset is not None else []
+            if len(target_planes) == 1:
+                return target_planes[0]
+            preferred = ("eyewhite", "eye") if kind == "eyes" else ("mouth",)
+            for plane in preferred:
+                if plane in target_planes:
+                    return plane
+    return "eyewhite" if kind == "eyes" else "mouth"
 
 
 def _expression_stack(document: "AssemblyDocument", kind: str, *, target_instance_id: str | None = None) -> list[str]:
@@ -342,7 +376,12 @@ def _configure_expression_variant(
             groups = {"closed": stack, "open": [donor_instance_id]}
         groups = {name: members for name, members in groups.items() if members}
         members = list(dict.fromkeys(member_id for member_ids in groups.values() for member_id in member_ids))
-        default = next(iter(groups.get("open", [])), donor_instance_id)
+        # A newly imported mouth donor must not make the portrait speak by
+        # default.  The existing/base mouth stack is the closed state; an
+        # open donor is an optional expression selected later.  Eyes keep
+        # their open default because the base eye stack is the normal state.
+        preferred_state = "open" if kind == "eyes" else "closed"
+        default = next(iter(groups.get(preferred_state, [])), donor_instance_id)
         add_variant_set(document, variant_set_id, members=members, default=default)
         configure_state_groups(document, variant_set_id, groups, default=default, active=default)
     else:
@@ -438,6 +477,7 @@ def import_donor(
         raise DonorError(f"no such target instance: {target_instance_id!r}")
     if alignment is None and target_instance is not None and import_mode in {"variant_member", "replacement"}:
         alignment = target_instance.transform
+    authored_plane = _expression_plane(document, expression_kind, target_instance_id) if expression_kind else None
 
     with Image.open(donor_path) as source_image:
         source_image = source_image.convert("RGBA")
@@ -481,6 +521,7 @@ def import_donor(
         "import_mode": import_mode,
         "target_instance_id": target_instance_id,
         "variant_state": _expression_state(semantic, expression_kind) if expression_kind else None,
+        "authored_plane": authored_plane,
     }
     asset_provenance = {"operation": "donor_import", **provenance_detail}
 
@@ -505,7 +546,7 @@ def import_donor(
                     source_layer_id=asset_id,
                     fallback_semantic=semantic,
                 ),
-                planes=[semantic],
+                planes=[authored_plane or semantic],
                 provenance=asset_provenance,
             )
         )
@@ -518,7 +559,7 @@ def import_donor(
                 kind=expression_kind,
                 target_slot=target_instance.slot,
             )
-            target_instance.plane = None
+            target_instance.plane = authored_plane
             if alignment is not None:
                 target_instance.transform = Transform.from_dict(transform)
             draw_order = target_instance.draw_order
@@ -532,6 +573,7 @@ def import_donor(
                     slot=slot or _normalized_slot(semantic, kind=expression_kind),
                     draw_order=draw_order,
                     transform=Transform.from_dict(transform),
+                    plane=authored_plane,
                 )
             )
             document.composition.setdefault("draw_order", []).append(instance_id)

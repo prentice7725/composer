@@ -188,6 +188,9 @@ def test_expression_donor_auto_builds_grouped_eye_and_mouth_states(tmp_path: Pat
     assert eyes["active"] == "eyewhite__instance"
     assert all(document.instances[item].visible for item in eyes["state_groups"]["open"])
     assert not document.instances[blink_result.instance_id].visible
+    assert document.instances[blink_result.instance_id].slot == "eye"
+    assert document.instances[blink_result.instance_id].plane == "eyewhite"
+    assert document.assets[blink_result.asset_id].planes == ["eyewhite"]
 
     with document.transaction():
         from portrait_composer.variants import set_active
@@ -211,6 +214,13 @@ def test_expression_donor_auto_builds_grouped_eye_and_mouth_states(tmp_path: Pat
         "closed": ["mouth__instance"],
         "open": [talk_result.instance_id],
     }
+    assert mouth["default"] == "mouth__instance"
+    assert mouth["active"] == "mouth__instance"
+    assert document.instances["mouth__instance"].visible
+    assert not document.instances[talk_result.instance_id].visible
+    assert document.instances[talk_result.instance_id].slot == "mouth"
+    assert document.instances[talk_result.instance_id].plane == "mouth"
+    assert document.assets[talk_result.asset_id].planes == ["mouth"]
     assert "expression_talk_open" in document.expressions
     assert document.expressions["expression_talk_open"]["variants"] == {"mouth_state": talk_result.instance_id}
     assert document.validate().ok
