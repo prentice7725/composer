@@ -309,3 +309,6 @@ core/CLI commands remain usable without the GUI extra.
 Deferred by design: user-editable shortcut preferences and a full profiling
 timeline/export surface. The current render timing is diagnostic feedback,
 not a replacement for AutoRig/runtime profiling.
+
+GUI tests remain optional for local core-only installs; CI installs the
+`[dev,gui]` extras and runs the full PySide6 suite in offscreen mode.

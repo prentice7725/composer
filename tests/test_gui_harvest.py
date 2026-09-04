@@ -113,3 +113,31 @@ def test_apply_harvest_pick_after_document_exists_is_one_undo_step(qapp, pool):
 
     assert window.document.history.revision == revision_before + 1
     assert window.document.instances["head__instance"] in window.document.instances.values()
+
+
+def test_composite_preview_replaces_current_candidate_while_overlay_keeps_it(qapp, tmp_path: Path):
+    first_root = make_portrait_bundle(
+        tmp_path / "first.portrait", layers=(("head", (255, 0, 0, 255)),)
+    )
+    second_root = make_portrait_bundle(
+        tmp_path / "second.portrait", layers=(("head", (0, 255, 0, 128)),)
+    )
+    pool = {
+        "first": read_portrait_bundle(first_root),
+        "second": read_portrait_bundle(second_root),
+    }
+    window = MainWindow()
+    window.harvest_source_pool = pool
+    window.apply_harvest_pick("head", "first")
+    window.set_context("HARVEST")
+    workbench = window.harvest_workbench
+    candidate = next(card for card in workbench._cards if card.run_label == "second")
+
+    candidate.hovered.emit("second", candidate.image_path, "composite")
+    composite_color = window.canvas.scene_model._reference_item.pixmap().toImage().pixelColor(10, 10)
+    candidate.hovered.emit("second", candidate.image_path, "overlay")
+    overlay_color = window.canvas.scene_model._reference_item.pixmap().toImage().pixelColor(10, 10)
+
+    assert composite_color.green() > composite_color.red()
+    assert overlay_color.red() > composite_color.red()
+    assert composite_color.alpha() < overlay_color.alpha()

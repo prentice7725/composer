@@ -14,8 +14,10 @@ class UISessionState:
     canvas_zoom: float = 1.0
     canvas_pan: tuple[float, float] = (0.0, 0.0)
     tree_filter: str = ""
+    tree_filter_mode: str = "All"
     tree_expansion: set[str] = field(default_factory=set)
     preview_mode: str = "Composite"
+    canvas_tool: str = "select"
     bake_analyzed: bool = False
     last_render_ms: float = 0.0
     transient_candidate: object | None = None

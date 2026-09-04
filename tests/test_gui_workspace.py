@@ -91,3 +91,23 @@ def test_render_time_is_exposed_as_ephemeral_status(qapp, portrait_bundle: Path,
     assert window.session.last_render_ms >= 0.0
     assert "render:" in window.statusBar().currentMessage()
     window.close()
+
+
+def test_save_is_blocked_before_writing_an_invalid_document(qapp, portrait_bundle: Path, tmp_path: Path):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    window = MainWindow(settings=_settings(tmp_path / "invalid.ini"))
+    window._display_document(
+        document,
+        image_sources,
+        portrait_bundle,
+        source_map=True,
+        import_warnings=warnings,
+    )
+    document.instances["head__instance"].asset_ref = "missing_asset"
+    target = tmp_path / "should-not-be-written.assembly"
+
+    assert window._write_bundle(target) is False
+    assert not target.exists()
+    assert "Save blocked" in window.statusBar().currentMessage()
+    window.close()

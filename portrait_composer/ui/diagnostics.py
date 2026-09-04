@@ -47,6 +47,20 @@ def _target_for_message(document, message: str) -> str | None:
     return None
 
 
+def _context_for_message(message: str) -> str:
+    """Route a diagnostic to the authoring surface that can resolve it."""
+    lowered = message.lower()
+    if any(token in lowered for token in ("rigintent", "deformation_scope", "attachment", "secondary region", "secondary_region")):
+        return "RIG INTENT"
+    if any(token in lowered for token in ("variant", "expression")):
+        return "VARIANTS"
+    if any(token in lowered for token in ("donor", "alignment", "drift")):
+        return "DONOR"
+    if any(token in lowered for token in ("bake", "derived")):
+        return "BAKE"
+    return "ASSEMBLE"
+
+
 def collect_diagnostics(document, import_warnings: list[str] | None = None) -> list[Diagnostic]:
     """Collect validation and import warnings without mutating the document."""
     if document is None:
@@ -60,17 +74,15 @@ def collect_diagnostics(document, import_warnings: list[str] | None = None) -> l
             if key in seen:
                 continue
             seen.add(key)
-            diagnostics.append(
-                Diagnostic(severity, str(message), _target_for_message(document, str(message)))
-            )
+            text = str(message)
+            diagnostics.append(Diagnostic(severity, text, _target_for_message(document, text), _context_for_message(text)))
     for message in import_warnings or []:
         key = ("WARN", str(message))
         if key in seen:
             continue
         seen.add(key)
-        diagnostics.append(
-            Diagnostic("WARN", str(message), _target_for_message(document, str(message)))
-        )
+        text = str(message)
+        diagnostics.append(Diagnostic("WARN", text, _target_for_message(document, text), _context_for_message(text)))
     return diagnostics
 
 
@@ -105,4 +117,3 @@ def provenance_text(document, target_id: str) -> str:
                 else:
                     lines.append(f"  {key}: {value}")
     return "\n".join(lines) if lines else "No provenance recorded."
-

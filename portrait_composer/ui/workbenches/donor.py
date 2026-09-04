@@ -183,7 +183,13 @@ class DonorWorkbench(QWidget):
             initial = {"x": 0.0, "y": 0.0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0}
 
         opacity = self.opacity_slider.value() / 100.0
-        self.main_window.canvas.scene_model.donor_ghost.show(self._donor_image, transform=initial, opacity=opacity)
+        self.main_window.canvas.scene_model.donor_ghost.show(
+            self._donor_image,
+            transform=initial,
+            opacity=opacity,
+            target_roi=info["roi"] if info else None,
+            target_rotation=info["rotation"] if info else 0.0,
+        )
         self._set_controls_enabled(True)
         self._metrics_timer.start()
         self._refresh_metrics()

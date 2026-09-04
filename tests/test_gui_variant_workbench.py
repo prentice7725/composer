@@ -135,6 +135,16 @@ def test_expression_preview_is_transient_then_apply_commits(window, monkeypatch)
     assert window.document.variant_sets["outfit"]["active"] == committed_active_before
     assert window.document.instances[a].visible is True
 
+    window.set_context("ASSEMBLE")
+    cleared = window.canvas.scene_model._reference_item.pixmap().toImage().pixelColor(10, 10)
+    assert tuple(cleared.getRgb()) == window.canvas.scene_model._committed_reference.getpixel((10, 10))
+
+    window.set_context("VARIANTS")
+    editor = window.variant_workbench.expression_editor
+    editor.refresh()
+    combo = editor._dropdowns["outfit"]
+    combo.setCurrentIndex(combo.findData(b))
+
     editor._apply()
     assert window.document.variant_sets["outfit"]["active"] == b
     assert window.document.expressions["casual"]["variants"] == {"outfit": b}

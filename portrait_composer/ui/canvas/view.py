@@ -49,6 +49,18 @@ class CanvasView(QGraphicsView):
             return
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
+        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            candidates = []
+            for candidate in self.scene().items(scene_pos):
+                instance_id = candidate.data(INSTANCE_ROLE)
+                if instance_id and instance_id not in candidates:
+                    candidates.append(str(instance_id))
+            if candidates:
+                current = self.selection_model.instance_ids[0] if len(self.selection_model.instance_ids) == 1 else None
+                next_index = (candidates.index(current) + 1) % len(candidates) if current in candidates else 0
+                self.selection_model.select(candidates[next_index])
+                event.accept()
+                return
         item = self.itemAt(pos)
 
         if self.scene_model.donor_ghost.active:
@@ -180,10 +192,23 @@ class CanvasView(QGraphicsView):
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        window = self.window()
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            commit = getattr(window, "commit_pending_operation", None)
+            if commit is not None:
+                commit()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Escape and self.scene_model.donor_ghost.drag is not None:
             self.scene_model.donor_ghost.cancel_drag()
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Escape:
+            cancel = getattr(window, "cancel_pending_operation", None)
+            if cancel is not None:
+                cancel()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Escape and self.scene_model.region_edit.drag is not None:
             self.scene_model.region_edit.cancel_drag()
             event.accept()
@@ -197,6 +222,25 @@ class CanvasView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             event.accept()
             return
+        tools = {
+            Qt.Key.Key_V: "select",
+            Qt.Key.Key_G: "move",
+            Qt.Key.Key_R: "rotate",
+            Qt.Key.Key_S: "scale",
+        }
+        if event.key() in tools and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            set_tool = getattr(window, "set_canvas_tool", None)
+            if set_tool is not None:
+                set_tool(tools[event.key()])
+                event.accept()
+                return
+        preview_modes = {Qt.Key.Key_1: "target_only", Qt.Key.Key_2: "donor_only", Qt.Key.Key_3: "composite"}
+        if event.key() in preview_modes:
+            set_mode = getattr(window, "set_preview_mode_shortcut", None)
+            if set_mode is not None:
+                set_mode(preview_modes[event.key()])
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_F:
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 self.fit_canvas()

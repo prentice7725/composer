@@ -19,9 +19,15 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PIL import Image
-from PySide6.QtCore import QPointF, QRectF
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPen, QPixmap
-from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
+    QGraphicsItem,
+    QGraphicsLineItem,
+    QGraphicsPixmapItem,
+    QGraphicsRectItem,
+)
 
 DONOR_HANDLE_ROLE = 34
 HANDLE_SIZE = 9.0
@@ -53,7 +59,13 @@ class DonorAlignController:
         self.image: Optional[Image.Image] = None
         self.transform: dict = identity_transform()
         self.opacity = 0.55
+        self.target_roi: dict | None = None
+        self.target_rotation = 0.0
         self._pixmap_item: Optional[QGraphicsPixmapItem] = None
+        self._target_box: Optional[QGraphicsRectItem] = None
+        self._donor_box: Optional[QGraphicsRectItem] = None
+        self._target_crosshair: list[QGraphicsLineItem] = []
+        self._donor_crosshair: list[QGraphicsLineItem] = []
         self._handles: dict[str, QGraphicsItem] = {}
         self.drag: Optional[_Drag] = None
 
@@ -61,11 +73,34 @@ class DonorAlignController:
     def active(self) -> bool:
         return self._pixmap_item is not None
 
-    def show(self, image: Image.Image, *, transform: dict | None = None, opacity: float = 0.55) -> None:
+    def show(
+        self,
+        image: Image.Image,
+        *,
+        transform: dict | None = None,
+        opacity: float = 0.55,
+        target_roi: dict | None = None,
+        target_rotation: float = 0.0,
+    ) -> None:
         self.clear()
         self.image = image
         self.transform = dict(transform) if transform else identity_transform()
         self.opacity = opacity
+        self.target_roi = dict(target_roi) if target_roi else None
+        self.target_rotation = float(target_rotation)
+        if self.target_roi:
+            self._target_box = QGraphicsRectItem()
+            self._target_box.setPen(QPen(QColor("#59d4ff"), 2.0, Qt.PenStyle.DashLine))
+            self._target_box.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            self._target_box.setZValue(8_900)
+            self.scene.addItem(self._target_box)
+            self._target_crosshair = self._make_crosshair(QColor("#59d4ff"), 12.0, 8_950)
+        self._donor_box = QGraphicsRectItem()
+        self._donor_box.setPen(QPen(QColor("#7fffa0"), 1.5, Qt.PenStyle.DotLine))
+        self._donor_box.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self._donor_box.setZValue(9_050)
+        self.scene.addItem(self._donor_box)
+        self._donor_crosshair = self._make_crosshair(QColor("#7fffa0"), 10.0, 9_100)
         self._pixmap_item = self.scene.addPixmap(QPixmap())
         self._pixmap_item.setZValue(9_000)
         for name in _CORNERS:
@@ -92,8 +127,34 @@ class DonorAlignController:
         for handle in self._handles.values():
             self.scene.removeItem(handle)
         self._handles = {}
+        for item in (self._target_box, self._donor_box):
+            if item is not None:
+                self.scene.removeItem(item)
+        for item in (*self._target_crosshair, *self._donor_crosshair):
+            self.scene.removeItem(item)
+        self._target_box = None
+        self._donor_box = None
+        self._target_crosshair = []
+        self._donor_crosshair = []
+        self.target_roi = None
         self.image = None
         self.drag = None
+
+    def _make_crosshair(self, color: QColor, extent: float, z_value: float) -> list[QGraphicsLineItem]:
+        lines = [
+            QGraphicsLineItem(-extent, 0.0, extent, 0.0),
+            QGraphicsLineItem(0.0, -extent, 0.0, extent),
+        ]
+        for line in lines:
+            line.setPen(QPen(color, 1.25))
+            line.setZValue(z_value)
+            self.scene.addItem(line)
+        return lines
+
+    @staticmethod
+    def _place_crosshair(lines: list[QGraphicsLineItem], point: QPointF) -> None:
+        for line in lines:
+            line.setPos(point)
 
     def set_opacity(self, opacity: float) -> None:
         self.opacity = opacity
@@ -124,6 +185,25 @@ class DonorAlignController:
         self._pixmap_item.setPos(self.transform["x"], self.transform["y"])
         self._pixmap_item.setTransformOriginPoint(scaled_w / 2.0, scaled_h / 2.0)
         self._pixmap_item.setRotation(self.transform["rotation"])
+        if self._donor_box is not None:
+            self._donor_box.setRect(0.0, 0.0, scaled_w, scaled_h)
+            self._donor_box.setPos(self.transform["x"], self.transform["y"])
+            self._donor_box.setTransformOriginPoint(scaled_w / 2.0, scaled_h / 2.0)
+            self._donor_box.setRotation(self.transform["rotation"])
+            donor_center = self._pixmap_item.mapToScene(QPointF(scaled_w / 2.0, scaled_h / 2.0))
+            self._place_crosshair(self._donor_crosshair, donor_center)
+        if self._target_box is not None and self.target_roi is not None:
+            width = float(self.target_roi.get("width", 0.0))
+            height = float(self.target_roi.get("height", 0.0))
+            self._target_box.setRect(0.0, 0.0, width, height)
+            self._target_box.setPos(float(self.target_roi.get("x", 0.0)), float(self.target_roi.get("y", 0.0)))
+            self._target_box.setTransformOriginPoint(width / 2.0, height / 2.0)
+            self._target_box.setRotation(self.target_rotation)
+            target_center = QPointF(
+                float(self.target_roi.get("x", 0.0)) + width / 2.0,
+                float(self.target_roi.get("y", 0.0)) + height / 2.0,
+            )
+            self._place_crosshair(self._target_crosshair, target_center)
         self._reposition_handles(scaled_w, scaled_h)
 
     def _reposition_handles(self, scaled_w: float, scaled_h: float) -> None:

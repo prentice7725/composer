@@ -161,6 +161,24 @@ class CanvasScene(QGraphicsScene):
         except (FileNotFoundError, OSError):
             return
         base = self._committed_reference
+        # Composite means "as if this candidate replaced the canonical layer".
+        # Overlay is the comparison aid that intentionally keeps the current
+        # layer underneath the candidate.
+        replaced = None
+        if mode in {"composite", "difference", "flicker"} and self.document is not None:
+            order = list(self.document.composition.get("draw_order", []))
+            sources = {instance_id: self._resolve_image_path(instance_id) for instance_id in order}
+            sources[inst_id] = Path(candidate_path)
+            if inst_id not in order:
+                order.append(inst_id)
+            try:
+                if all(path is not None and Path(path).exists() for path in sources.values()):
+                    replaced = render_subset(self.document, sources, order)
+            except (OSError, ValueError):
+                replaced = None
+        if replaced is None:
+            replaced = base.copy()
+            replaced.alpha_composite(positioned, dest=offset)
         overlaid = base.copy()
         overlaid.alpha_composite(positioned, dest=offset)
 
@@ -168,18 +186,22 @@ class CanvasScene(QGraphicsScene):
             preview = Image.new("RGBA", base.size, (0, 0, 0, 0))
             preview.alpha_composite(positioned, dest=offset)
             self._set_preview_pixmap(preview)
+        elif mode == "target_only":
+            self._set_preview_pixmap(base)
         elif mode == "difference":
-            diff = ImageChops.difference(base.convert("RGB"), overlaid.convert("RGB"))
+            diff = ImageChops.difference(base.convert("RGB"), replaced.convert("RGB"))
             self._set_preview_pixmap(diff.convert("RGBA"))
         elif mode == "flicker":
-            self._flicker_frames = (base, overlaid)
+            self._flicker_frames = (base, replaced)
             self._flicker_phase = False
             self._flicker_timer = QTimer()
             self._flicker_timer.timeout.connect(self._flicker_tick)
             self._flicker_timer.start(450)
             self._set_preview_pixmap(base)
-        else:  # "composite" / "overlay" -- the common default
+        elif mode == "overlay":
             self._set_preview_pixmap(overlaid)
+        else:  # composite
+            self._set_preview_pixmap(replaced)
 
     def _flicker_tick(self) -> None:
         if self._flicker_frames is None:

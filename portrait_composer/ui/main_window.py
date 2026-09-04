@@ -204,6 +204,12 @@ class MainWindow(QMainWindow):
         view_menu.addAction(fit)
         view_menu.addAction(fit_selection)
         view_menu.addSeparator()
+        search_action = QAction("Focus Tree Search", self)
+        search_action.setShortcut(QKeySequence("Ctrl+F"))
+        search_action.setToolTip("Focus the Assembly Tree search field")
+        search_action.triggered.connect(self.focus_tree_search)
+        view_menu.addAction(search_action)
+        view_menu.addSeparator()
         context_shortcuts = (("Harvest", "H", "HARVEST"), ("Donor Align", "D", "DONOR"), ("Rig Intent", "I", "RIG INTENT"), ("Bake", "B", "BAKE"))
         for label, key, context in context_shortcuts:
             action = QAction(label, self)
@@ -281,6 +287,9 @@ class MainWindow(QMainWindow):
             self.set_context(str(context))
         tree_filter = self.settings.value("tree_filter", "")
         self.tree_dock.search.setText(str(tree_filter or ""))
+        tree_filter_mode = str(self.settings.value("tree_filter_mode", "All") or "All")
+        if self.tree_dock.filter_selector.findText(tree_filter_mode) >= 0:
+            self.tree_dock.filter_selector.setCurrentText(tree_filter_mode)
         try:
             zoom = float(self.settings.value("canvas_zoom", 1.0))
             pan = (
@@ -299,6 +308,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("canvas_pan_x", self.session.canvas_pan[0])
         self.settings.setValue("canvas_pan_y", self.session.canvas_pan[1])
         self.settings.setValue("tree_filter", self.tree_dock.search.text())
+        self.settings.setValue("tree_filter_mode", self.tree_dock.filter_selector.currentText())
         self.settings.setValue("recent_files", self.recent_files)
         self.settings.sync()
 
@@ -335,7 +345,7 @@ class MainWindow(QMainWindow):
             # editing aid (directive #18); it isn't part of any other
             # context's canvas presentation.
             self.canvas.scene_model.region_edit.clear()
-        if previous == "BAKE" and context != "BAKE":
+        if previous in {"BAKE", "VARIANTS"} and context not in {"BAKE", "VARIANTS"}:
             self.canvas.scene_model.clear_transient_preview()
         if hasattr(self, "diagnostics_dock"):
             self._refresh_diagnostics()
@@ -596,14 +606,52 @@ class MainWindow(QMainWindow):
     def _write_bundle(self, target: Path) -> None:
         if self.document is None:
             return
+        validation = self.document.validate()
+        if not validation.ok:
+            details = "\n".join(f"- {message}" for message in validation.errors)
+            self.statusBar().showMessage(f"Save blocked: document validation failed. {details}", 10000)
+            return False
         try:
             write_assembly_bundle(self.document, self.image_sources, target)
             self.bundle_path = target
             self.document.mark_saved()
             self._remember_recent(target)
             self._update_status()
+            return True
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+
+    def commit_pending_operation(self) -> None:
+        if self.session.active_context == "HARVEST":
+            self.harvest_workbench.commit_pending()
+
+    def cancel_pending_operation(self) -> None:
+        if self.session.active_context == "HARVEST":
+            self.harvest_workbench.cancel_pending()
+        self.canvas.scene_model.clear_transient_preview()
+
+    def focus_tree_search(self) -> None:
+        self.tree_dock.search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.tree_dock.search.selectAll()
+
+    def set_canvas_tool(self, tool: str) -> None:
+        self.session.canvas_tool = tool
+        self.statusBar().showMessage(f"Canvas tool: {tool}", 2500)
+
+    def set_preview_mode_shortcut(self, mode: str) -> None:
+        self.session.preview_mode = mode
+        if self.session.active_context == "HARVEST":
+            harvest_mode = {"donor_only": "solo"}.get(mode, mode)
+            for button in self.harvest_workbench.mode_group.buttons():
+                if button.property("mode") == harvest_mode:
+                    button.setChecked(True)
+                    break
+        elif self.session.active_context == "DONOR":
+            for button in self.donor_workbench.mode_group.buttons():
+                if button.property("mode") == mode:
+                    button.setChecked(True)
+                    break
 
     def undo(self) -> None:
         if self.document is not None and self.document.history.can_undo():

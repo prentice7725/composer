@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QLabel,
+    QPushButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -98,6 +99,40 @@ class InspectorDock(QDockWidget):
         self.form.addRow(QLabel("Plane"), plane_box)
         self.form.addRow(QLabel("Draw order"), QLabel(str(instance.draw_order)))
 
+        variant_sets = [
+            vs_id
+            for vs_id, variant_set in document.variant_sets.items()
+            if instance_id in variant_set.get("members", [])
+        ]
+        if variant_sets:
+            self._add_context_link("VariantSet", ", ".join(variant_sets), "VARIANTS")
+
+        rig_intent = document.rig_intent or {}
+        scope = rig_intent.get("deformation_scopes", {}).get(instance_id)
+        attachments = [
+            attachment_id
+            for attachment_id, attachment in rig_intent.get("attachments", {}).items()
+            if instance_id in {attachment.get("child"), attachment.get("target")}
+        ]
+        regions = [
+            region_id
+            for region_id, region in rig_intent.get("regions", {}).items()
+            if region.get("target") == instance_id
+        ]
+        if scope or attachments:
+            summary = scope or "attachment"
+            if attachments:
+                summary += f" · {', '.join(attachments)}"
+            self._add_context_link("RigIntent", summary, "RIG INTENT")
+        if regions:
+            self._add_context_link("Secondary Region", ", ".join(regions), "RIG INTENT")
+
+        provenance_data = asset.provenance if asset else {}
+        if provenance_data.get("operation") == "donor_import":
+            self._add_context_link("Donor", str(provenance_data.get("source_donor", "imported")), "DONOR")
+        if provenance_data.get("operation") == "bake" or not asset or not asset.source_binding:
+            self._add_context_link("Bake / Derived", "Derived layer" if provenance_data else "Unresolved source", "BAKE")
+
         window = self._main_window()
         diagnostics = (
             [
@@ -146,6 +181,18 @@ class InspectorDock(QDockWidget):
             box.setAccessibleName(f"Transform {name}")
             box.editingFinished.connect(lambda field_name=name, spin=box: self._commit_transform_field(field_name, spin.value()))
             self.form.addRow(QLabel(name), box)
+
+    def _add_context_link(self, label: str, value: str, context: str) -> None:
+        """Show a compact conditional section and route it to its workbench."""
+        window = self._main_window()
+        button = QPushButton(f"{value}  ·  Open {context.title()}")
+        button.setAccessibleName(f"{label} details")
+        button.setToolTip(f"Open the {context} workspace for this layer")
+        if window is None:
+            button.setEnabled(False)
+        else:
+            button.clicked.connect(lambda checked=False, target=context: window.set_context(target))
+        self.form.addRow(QLabel(label), button)
 
     @staticmethod
     def _spin(minimum: float, maximum: float, step: float, value: float) -> QDoubleSpinBox:

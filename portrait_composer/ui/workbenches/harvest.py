@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 THUMBNAIL_SIZE = 96
-MODES = ("composite", "solo", "overlay", "flicker", "difference")
+MODES = ("target_only", "solo", "overlay", "composite", "flicker", "difference")
 
 
 class _CandidateCard(QFrame):
@@ -100,7 +100,7 @@ class HarvestWorkbench(QWidget):
             button = QRadioButton(mode.capitalize())
             button.setProperty("mode", mode)
             button.setAccessibleName(f"Harvest preview mode {mode}")
-            if mode == "overlay":
+            if mode == "composite":
                 button.setChecked(True)
             self.mode_group.addButton(button)
             top.addWidget(button)
@@ -198,8 +198,20 @@ class HarvestWorkbench(QWidget):
         self.status_label.setText(f"{self._tag} · pending: {run_label} (Apply to commit)")
 
     def _apply(self) -> None:
+        self.commit_pending()
+
+    def commit_pending(self) -> None:
         if self._tag is None or self._pending_run_label is None:
             return
         self.main_window.apply_harvest_pick(self._tag, self._pending_run_label)
         self._pending_run_label = None
         self.refresh()
+
+    def cancel_pending(self) -> None:
+        self._pending_run_label = None
+        for card in self._cards:
+            card.set_pending(False)
+        self.apply_button.setEnabled(False)
+        self.main_window.canvas.scene_model.clear_transient_preview()
+        if self._tag:
+            self.status_label.setText(f"{self._tag} · pending selection cleared")

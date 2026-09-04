@@ -9,6 +9,7 @@ from __future__ import annotations
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDockWidget,
     QLineEdit,
     QMenu,
@@ -49,6 +50,13 @@ class TreeDock(QDockWidget):
         self.search.setPlaceholderText("Search layers, slots, sources")
         self.search.setAccessibleName("Assembly tree search")
         self.search.textChanged.connect(self.proxy.setFilterFixedString)
+        self.filter_selector = QComboBox()
+        self.filter_selector.addItems(
+            ["All", "Selected Source", "Variants", "Warnings", "Rig-enabled", "Derived", "Hidden", "Unresolved"]
+        )
+        self.filter_selector.setAccessibleName("Assembly tree status filter")
+        self.filter_selector.setToolTip("Filter layers by source, authoring relation, or validation state")
+        self.filter_selector.currentTextChanged.connect(self.proxy.set_filter_mode)
         self.tree = QTreeView()
         self.tree.setModel(self.proxy)
         self.tree.setHeaderHidden(True)
@@ -70,6 +78,7 @@ class TreeDock(QDockWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         layout.addWidget(self.search)
+        layout.addWidget(self.filter_selector)
         layout.addWidget(self.tree)
         self.setWidget(body)
         selection_model.subscribe(self._refresh_selection)
