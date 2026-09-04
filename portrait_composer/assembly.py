@@ -224,6 +224,118 @@ def harvest_assembly(bundles: dict, selections: dict) -> tuple[AssemblyDocument,
     return document, image_sources, warnings
 
 
+def harvest_instance(
+    document: AssemblyDocument,
+    image_sources: dict,
+    bundles: dict,
+    target_tag: str,
+    run_label: str,
+) -> None:
+    """Re-harvests a single canonical tag into an already-assembled document
+    from a chosen run, inside one transaction (C5-C's "compare candidates,
+    change my mind" GUI loop -- directive #8.2, #10 UI half).
+
+    Unlike ``harvest_assembly`` (which always builds a whole new document
+    from a complete ``{tag: run_label}`` selection), this swaps just one
+    tag's backing asset/source in place: if ``target_tag`` is already
+    present, its instance id, slot, draw_order position and any transform
+    the user already applied are preserved -- only what pixels back it
+    changes. If it's new, it's appended. This lets a re-pick live on the
+    document's own undo history instead of replacing the document
+    wholesale, which is what lets a single ``document.undo()`` after a
+    re-pick restore the previous source choice.
+
+    ``bundles``: {run_label: PortraitBundle}, always resolved against a
+    bundle's own ``layers/`` -- never ``raw_layers/``.
+    """
+    bundle = bundles.get(run_label)
+    if bundle is None:
+        raise HarvestError(f"unknown run: {run_label!r}")
+    layer = next((l for l in bundle.layers if l.tag == target_tag), None)
+    if layer is None:
+        raise HarvestError(
+            f"run {run_label!r} has no canonical layer {target_tag!r} in layers/ "
+            "(raw_layers/ is never a harvesting candidate)"
+        )
+
+    inst_id = instance_id_for(target_tag)
+    revision = content_hash(bundle.root / "manifest.json")
+    bundle_canvas = dict(bundle.canvas)
+
+    with document.transaction():
+        canvas = document.composition.get("canvas") or {}
+        if not canvas:
+            document.composition["canvas"] = bundle_canvas
+        elif canvas != bundle_canvas:
+            raise HarvestError(
+                f"canvas mismatch: run {run_label!r} does not match the canvas already "
+                "established in this document"
+            )
+
+        if run_label not in document.sources:
+            document.sources[run_label] = SourceAsset(
+                source_id=run_label,
+                path=str(bundle.root),
+                metadata={
+                    "source_identity": bundle.source_identity,
+                    "generation": dict(bundle.generation),
+                    "canvas": bundle_canvas,
+                    "validation": dict(bundle.validation),
+                },
+            )
+
+        draw_order = list(document.composition.get("draw_order", []))
+        insert_index = draw_order.index(inst_id) if inst_id in draw_order else len(draw_order)
+        existing = document.instances.get(inst_id)
+        preserved = {
+            "slot": existing.slot if existing is not None else target_tag,
+            "visible": existing.visible if existing is not None else True,
+            "opacity": existing.opacity if existing is not None else 1.0,
+            "transform": existing.transform if existing is not None else Transform(),
+        }
+        if existing is not None:
+            document.remove_instance(inst_id)  # also drops it from composition draw_order
+            document.remove_asset(target_tag)
+            draw_order = list(document.composition.get("draw_order", []))
+
+        asset = AssetDefinition(
+            id=target_tag,
+            semantic=target_tag,
+            source_binding=SourceBinding(
+                source_id=run_label,
+                revision=revision,
+                source_layer_id=layer.tag,
+                fallback_semantic=layer.source_tag,
+            ),
+            planes=[target_tag],
+        )
+        document.add_asset(asset)
+        instance = LayerInstance(
+            id=inst_id,
+            asset_ref=asset.id,
+            slot=preserved["slot"],
+            draw_order=layer.draw_order,
+            visible=preserved["visible"],
+            opacity=preserved["opacity"],
+            transform=preserved["transform"],
+        )
+        document.add_instance(instance)
+        draw_order.insert(min(insert_index, len(draw_order)), inst_id)
+        document.composition["draw_order"] = draw_order
+
+        image_sources[inst_id] = bundle.layer_path(layer)
+        document.provenance.record(
+            inst_id,
+            operation="multi_source_harvest",
+            sources=[run_label],
+            run_label=run_label,
+            source_layer_id=layer.tag,
+            source_tag=layer.source_tag,
+            revision=revision,
+            generation=dict(bundle.generation),
+        )
+
+
 def set_draw_order(document: AssemblyDocument, new_order: list) -> None:
     """Final draw order authoring (directive #15), as a standalone
     transactional call rather than only through a recipe op."""

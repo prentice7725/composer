@@ -5,7 +5,7 @@ import pytest
 from portrait_composer.assets import AssetDefinition
 from portrait_composer.document import AssemblyDocument
 from portrait_composer.instances import LayerInstance
-from portrait_composer.variants import VariantSetError, add_variant_set, remove_variant_set, set_active
+from portrait_composer.variants import VariantSetError, add_variant_set, remove_member, remove_variant_set, set_active
 
 
 def _doc():
@@ -77,6 +77,52 @@ def test_active_not_in_members_is_hard_error_on_manual_edit():
     result = doc.validate()
     assert not result.ok
     assert any("active" in e and "not in members" in e for e in result.errors)
+
+
+def test_remove_member_reassigns_default_and_active_to_a_remaining_member():
+    doc = _doc()
+    with doc.transaction():
+        add_variant_set(doc, "mouth", members=["mouth_neutral", "mouth_a", "mouth_i"], default="mouth_neutral")
+    with doc.transaction():
+        remove_member(doc, "mouth", "mouth_neutral")
+
+    vs = doc.variant_sets["mouth"]
+    assert "mouth_neutral" not in vs["members"]
+    assert vs["default"] != "mouth_neutral"
+    assert vs["active"] != "mouth_neutral"
+    assert doc.instances[vs["active"]].visible is True
+    assert doc.validate().ok
+
+
+def test_remove_member_of_a_non_active_non_default_member_leaves_active_untouched():
+    doc = _doc()
+    with doc.transaction():
+        add_variant_set(doc, "mouth", members=["mouth_neutral", "mouth_a", "mouth_i"], default="mouth_neutral")
+    with doc.transaction():
+        remove_member(doc, "mouth", "mouth_i")
+
+    vs = doc.variant_sets["mouth"]
+    assert vs["active"] == "mouth_neutral"
+    assert vs["default"] == "mouth_neutral"
+
+
+def test_remove_member_refuses_to_empty_a_variant_set():
+    doc = _doc()
+    with doc.transaction():
+        add_variant_set(doc, "mouth", members=["mouth_neutral"], default="mouth_neutral")
+    with pytest.raises(VariantSetError, match="only member"):
+        with doc.transaction():
+            remove_member(doc, "mouth", "mouth_neutral")
+    assert doc.variant_sets["mouth"]["members"] == ["mouth_neutral"]
+
+
+def test_remove_member_unknown_member_raises():
+    doc = _doc()
+    with doc.transaction():
+        add_variant_set(doc, "mouth", members=["mouth_neutral", "mouth_a"], default="mouth_neutral")
+    with pytest.raises(VariantSetError, match="is not a member"):
+        with doc.transaction():
+            remove_member(doc, "mouth", "mouth_i")
 
 
 def test_undo_restores_previous_active_member_and_visibility():

@@ -91,6 +91,26 @@ def create_or_add_member(
         add_member(document, vs_id, member_id, activate=default)
 
 
+def remove_member(document: "AssemblyDocument", vs_id: str, member_id: str) -> None:
+    """Remove one member from a VariantSet (C5-D drag-out / context action,
+    directive #9.2). Reassigns ``default``/``active`` to another remaining
+    member if the removed one held either -- a VariantSet must always be
+    able to render something, so it can never be left with zero members."""
+    vs = document.variant_sets.get(vs_id)
+    if vs is None:
+        raise VariantSetError(f"no such variant set: {vs_id!r}")
+    if member_id not in vs["members"]:
+        raise VariantSetError(f"variant set {vs_id!r}: {member_id!r} is not a member")
+    if len(vs["members"]) <= 1:
+        raise VariantSetError(f"variant set {vs_id!r}: cannot remove its only member")
+
+    vs["members"].remove(member_id)
+    if vs.get("default") == member_id:
+        vs["default"] = vs["members"][0]
+    if vs.get("active") == member_id:
+        set_active(document, vs_id, vs["members"][0])
+
+
 def set_active(document: "AssemblyDocument", vs_id: str, member_id: str) -> None:
     """The "VariantSet exclusive 동작" operation: switches the active
     member and, in exclusive mode, shows only that member's instance."""
