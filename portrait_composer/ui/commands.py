@@ -137,6 +137,9 @@ def import_donor_asset(
     target_rotation: float,
     allow_drift: bool,
     variant_set_id: str | None = None,
+    import_mode: str | None = None,
+    target_instance_id: str | None = None,
+    target_anchor: tuple[float, float] | None = None,
 ) -> DonorImportResult:
     """Commits one Donor Align import (C5-E, directive #10.4).
 
@@ -162,6 +165,9 @@ def import_donor_asset(
         target_rotation=target_rotation,
         allow_drift=allow_drift,
         variant_set_id=variant_set_id,
+        import_mode=import_mode,
+        target_instance_id=target_instance_id,
+        target_anchor=target_anchor,
         image_sources=image_sources,
     )
 
@@ -212,7 +218,18 @@ def set_region_geometry(document, image_sources, region_id: str, geometry: dict)
     _secondary_regions.set_geometry(document, region_id, geometry)
 
 
-def bake_candidate(document, image_sources, candidate, *, derived_id: str, semantic: str, work_dir, profile: str | None = None):
+def bake_candidate(
+    document,
+    image_sources,
+    candidate,
+    *,
+    derived_id: str,
+    semantic: str,
+    work_dir,
+    profile: str | None = None,
+    ordered_instance_ids: list | None = None,
+    transform_overrides: dict | None = None,
+):
     """Commits one Bake Apply (C5-G, directive #13.4).
 
     profiles.apply_candidate -> bake.apply_bake_plan already wraps
@@ -224,7 +241,15 @@ def bake_candidate(document, image_sources, candidate, *, derived_id: str, seman
     enforcement, not the button state.
     """
     return _apply_bake_candidate(
-        document, image_sources, candidate, derived_id=derived_id, semantic=semantic, work_dir=work_dir, profile=profile
+        document,
+        image_sources,
+        candidate,
+        derived_id=derived_id,
+        semantic=semantic,
+        work_dir=work_dir,
+        profile=profile,
+        ordered_instance_ids=ordered_instance_ids,
+        transform_overrides=transform_overrides,
     )
 
 

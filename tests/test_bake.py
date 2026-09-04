@@ -15,6 +15,7 @@ from portrait_composer.bake import (
     apply_bake_plan,
 )
 from portrait_composer.bundle import read_portrait_bundle
+from portrait_composer.instances import Transform
 from portrait_composer.links import create_link
 from portrait_composer.variants import add_variant_set
 
@@ -227,6 +228,36 @@ def test_apply_bake_plan_draw_order_replaces_sources_in_place(tmp_path: Path):
     )
 
     assert document.composition["draw_order"] == [derived_id, "head__instance"]
+
+
+def test_apply_bake_plan_uses_transient_staging_order_and_transforms(tmp_path: Path):
+    from portrait_composer.render import render_subset
+
+    document, image_sources = _doc(tmp_path)
+    document.rig_intent["deformation_scopes"]["neck__instance"] = "rigid"
+    document.rig_intent["deformation_scopes"]["topwear__instance"] = "rigid"
+    ordered = ["topwear__instance", "neck__instance"]
+    overrides = {
+        "topwear__instance": Transform(x=3.0, y=4.0),
+        "neck__instance": Transform(x=0.0, y=0.0),
+    }
+    expected = render_subset(document, image_sources, ordered, transform_overrides=overrides)
+
+    derived_id, _ = apply_bake_plan(
+        document,
+        image_sources,
+        ["neck__instance", "topwear__instance"],
+        derived_id="staged_merge",
+        semantic="staged_merge",
+        work_dir=tmp_path / "work",
+        ordered_instance_ids=ordered,
+        transform_overrides=overrides,
+    )
+
+    actual = Image.open(image_sources[derived_id]).convert("RGBA")
+    assert actual.tobytes() == expected.tobytes()
+    assert document.instances["topwear__instance"].transform.to_dict() == Transform().to_dict()
+    assert [item["instance"] for item in document.assets["staged_merge"].provenance["derived_from"]] == ordered
 
 
 def test_apply_bake_plan_deterministic_reference_render(tmp_path: Path):

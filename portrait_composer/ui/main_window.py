@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
     SETTINGS_ORGANIZATION = "prentice7725"
     SETTINGS_APPLICATION = "PortraitComposer"
     MAX_RECENT_FILES = 10
+    WORKBENCH_DEFAULT_HEIGHT = 240
 
     def __init__(self, parent=None, *, settings=None):
         super().__init__(parent)
@@ -86,6 +87,10 @@ class MainWindow(QMainWindow):
         self.rig_intent_workbench = RigIntentWorkbench(self)
         self.bake_workbench = BakeWorkbench(self)
         self.workbench = QStackedWidget()
+        # A stacked widget otherwise reports the largest workbench's size
+        # hint as its minimum, which makes the bottom dock consume half the
+        # window even when the active workbench is compact.
+        self.workbench.setMinimumHeight(160)
         self.workbench.addWidget(self.workbench_placeholder)
         self.workbench.addWidget(self.harvest_workbench)
         self.workbench.addWidget(self.variant_workbench)
@@ -154,6 +159,9 @@ class MainWindow(QMainWindow):
         save_as_action = QAction("Save As…", self)
         save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         save_as_action.triggered.connect(self.save_bundle_as)
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        exit_action.triggered.connect(lambda: self.close())
         file_menu.addAction(new_action)
         file_menu.addSeparator()
         file_menu.addAction(import_action)
@@ -162,6 +170,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
+        file_menu.addSeparator()
+        file_menu.addAction(exit_action)
         self.recent_menu = file_menu.addMenu("Recent Files")
         self.recent_menu.setAccessibleName("Recent files")
         self._update_recent_menu()
@@ -209,6 +219,8 @@ class MainWindow(QMainWindow):
         search_action.setToolTip("Focus the Assembly Tree search field")
         search_action.triggered.connect(self.focus_tree_search)
         view_menu.addAction(search_action)
+        view_menu.addAction(self.workbench_dock.toggleViewAction())
+        view_menu.addAction(self.diagnostics_dock.toggleViewAction())
         view_menu.addSeparator()
         context_shortcuts = (("Harvest", "H", "HARVEST"), ("Donor Align", "D", "DONOR"), ("Rig Intent", "I", "RIG INTENT"), ("Bake", "B", "BAKE"))
         for label, key, context in context_shortcuts:
@@ -315,6 +327,16 @@ class MainWindow(QMainWindow):
     def set_context(self, context: str) -> None:
         previous = self.session.active_context
         self.session.active_context = context
+        if context == "ASSEMBLE":
+            self.workbench_dock.hide()
+        else:
+            self.workbench_dock.show()
+            self.workbench_dock.raise_()
+            self.resizeDocks(
+                [self.workbench_dock],
+                [self.WORKBENCH_DEFAULT_HEIGHT],
+                Qt.Orientation.Vertical,
+            )
         for name, button in self.context_buttons.items():
             button.setChecked(name == context)
         self.canvas.scene_model.set_context(context)

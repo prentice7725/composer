@@ -18,7 +18,8 @@ from PIL import Image, ImageChops
 from .assets import AssetDefinition
 from .instances import LayerInstance, Transform
 from .sources import SourceAsset, SourceBinding, content_hash
-from .variants import add_member, add_variant_set
+from .slots import is_known_slot
+from .variants import add_member, add_variant_set, configure_state_groups
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -227,15 +228,150 @@ def _transform_dict(alignment: dict | Transform | None) -> dict:
     return Transform.from_dict(result).to_dict()
 
 
-def _default_variant_set(semantic: str) -> str | None:
-    normalized = semantic.lower()
-    if normalized in {"eye", "eyes", "eye_state"} or normalized.startswith("eye_") or normalized.startswith("eyes_"):
-        return "eye_state"
-    if normalized in {"mouth", "mouth_state", "mouth_viseme"} or normalized.startswith("mouth_"):
-        return "mouth_viseme"
+def expression_donor_kind(semantic: str) -> str | None:
+    """Return the expression family for a donor semantic, if any."""
+    normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
+    if (
+        normalized in {"eye", "eyes", "eye_state", "eyes_state", "blink"}
+        or normalized.startswith(("eye_", "eyes_", "blink_"))
+    ):
+        return "eyes"
+    if (
+        normalized in {"mouth", "mouth_state", "mouth_viseme", "talk", "open_mouth"}
+        or normalized.startswith(("mouth_", "talk_", "open_mouth_"))
+    ):
+        return "mouth"
     if normalized in {"brow", "brows", "brow_state"} or normalized.startswith("brow_"):
-        return "brow_state"
+        return "brow"
     return None
+
+
+def _default_variant_set(semantic: str) -> str | None:
+    kind = expression_donor_kind(semantic)
+    return {"eyes": "eyes_state", "mouth": "mouth_state", "brow": "brow_state"}.get(kind)
+
+
+def _expression_state(semantic: str, kind: str) -> str:
+    normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
+    if kind == "eyes":
+        return "closed" if normalized == "blink" or any(token in normalized for token in ("closed", "blink")) else "open"
+    if kind == "mouth":
+        return "open" if any(token in normalized for token in ("open", "talk")) else "closed"
+    return "default"
+
+
+def _normalized_slot(semantic: str, *, kind: str | None = None, target_slot: str | None = None) -> str:
+    if target_slot and is_known_slot(target_slot):
+        return target_slot
+    normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized == "body_remainder":
+        return "body_back"
+    if kind == "eyes" or normalized in {"eye", "eyes", "eyewhite", "irides", "iris", "eyelash"}:
+        return "eye"
+    if kind == "mouth" or normalized in {"mouth", "mouth_closed", "mouth_neutral", "mouth_open"}:
+        return "mouth"
+    if normalized in {"neck"}:
+        return "neck"
+    if normalized in {"head", "face"}:
+        return normalized
+    if normalized.startswith("hair_"):
+        return "hair_front" if normalized.endswith("front") else "hair_back"
+    if normalized in {"topwear", "torso", "upper_torso"} or normalized.startswith(("topwear_", "upper_torso_")):
+        return "torso"
+    if normalized in {"handwear", "hand_overlay", "sleeve", "arm"} or normalized.startswith(("handwear_", "hand_overlay_", "sleeve_", "arm_")):
+        return "torso_front"
+    return semantic
+
+
+def _expression_stack(document: "AssemblyDocument", kind: str, *, target_instance_id: str | None = None) -> list[str]:
+    """Find the existing facial stack without guessing from pixels."""
+    if document is None:
+        return []
+    eye_semantics = {"eyewhite", "irides", "iris", "eyelash", "eye", "eyes", "eye_open", "eyes_open"}
+    mouth_semantics = {"mouth", "mouth_closed", "mouth_neutral"}
+    allowed = eye_semantics if kind == "eyes" else mouth_semantics
+    found: list[str] = []
+    if target_instance_id in document.instances:
+        target = document.instances[target_instance_id]
+        target_asset = document.assets.get(target.asset_ref)
+        target_semantic = target_asset.semantic.lower() if target_asset and isinstance(target_asset.semantic, str) else ""
+        if target_semantic in allowed:
+            found.append(target_instance_id)
+    for instance_id, instance in document.instances.items():
+        asset = document.assets.get(instance.asset_ref)
+        semantic = asset.semantic.lower() if asset and isinstance(asset.semantic, str) else ""
+        if semantic in allowed and instance_id not in found:
+            found.append(instance_id)
+    found.sort(key=lambda instance_id: document.instances[instance_id].draw_order)
+    return found
+
+
+def _auto_expression_preset(document: "AssemblyDocument", variant_set_id: str, instance_id: str, semantic: str) -> None:
+    normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
+    preset_name = None
+    if normalized == "blink" or normalized.startswith("blink_"):
+        preset_name = "expression_blink"
+    elif normalized == "talk_open" or normalized.startswith("talk_open_"):
+        preset_name = "expression_talk_open"
+    if preset_name is None:
+        return
+    preset = document.expressions.get(preset_name, {"variants": {}})
+    variants = dict(preset.get("variants", {}))
+    variants[variant_set_id] = instance_id
+    document.expressions[preset_name] = {
+        "variants": variants,
+        "metadata": {"auto_generated": True, "source": "donor_import"},
+    }
+
+
+def _configure_expression_variant(
+    document: "AssemblyDocument",
+    *,
+    variant_set_id: str,
+    donor_instance_id: str,
+    kind: str,
+    state: str,
+    target_instance_id: str | None,
+) -> None:
+    existing = document.variant_sets.get(variant_set_id)
+    if existing is None:
+        stack = _expression_stack(document, kind, target_instance_id=target_instance_id)
+        if state == "closed":
+            groups = {"open": stack, "closed": [donor_instance_id]}
+        else:
+            groups = {"closed": stack, "open": [donor_instance_id]}
+        groups = {name: members for name, members in groups.items() if members}
+        members = list(dict.fromkeys(member_id for member_ids in groups.values() for member_id in member_ids))
+        default = next(iter(groups.get("open", [])), donor_instance_id)
+        add_variant_set(document, variant_set_id, members=members, default=default)
+        configure_state_groups(document, variant_set_id, groups, default=default, active=default)
+    else:
+        groups = {name: list(member_ids) for name, member_ids in (existing.get("state_groups") or {}).items()}
+        if not groups:
+            previous = list(existing.get("members", []))
+            if kind == "eyes":
+                groups["open"] = previous
+            else:
+                groups["closed"] = previous
+        stack = _expression_stack(document, kind, target_instance_id=target_instance_id)
+        if kind == "eyes" and stack:
+            groups.setdefault("open", [])
+            groups["open"] = list(dict.fromkeys([*groups["open"], *stack]))
+        if kind == "mouth" and stack:
+            groups.setdefault("closed", [])
+            groups["closed"] = list(dict.fromkeys([*groups["closed"], *stack]))
+        groups.setdefault(state, [])
+        groups[state] = list(dict.fromkeys([*groups[state], donor_instance_id]))
+        active = existing.get("active") if existing.get("active") in existing.get("members", []) else None
+        default = existing.get("default") if existing.get("default") in existing.get("members", []) else None
+        default = default or next(iter(groups.get("open", [])), donor_instance_id)
+        active = active or default
+        configure_state_groups(document, variant_set_id, groups, default=default, active=active)
+    vs = document.variant_sets[variant_set_id]
+    vs.setdefault("state_labels", {})
+    for state_name, member_ids in vs.get("state_groups", {}).items():
+        for member_id in member_ids:
+            vs["state_labels"][member_id] = state_name
 
 
 def import_donor(
@@ -256,6 +392,8 @@ def import_donor(
     draw_order: int | None = None,
     variant_set_id: str | None = None,
     variant_set: str | None = None,
+    import_mode: str | None = None,
+    target_instance_id: str | None = None,
     target_roi: Any = None,
     target_size: tuple[int, int] | None = None,
     target_anchor: tuple[float, float] | None = None,
@@ -275,10 +413,31 @@ def import_donor(
         raise DonorError(f"donor file does not exist: {donor_path}")
     if not semantic:
         raise DonorError("donor semantic must be non-empty")
+    expression_kind = expression_donor_kind(semantic)
+    if import_mode is None:
+        import_mode = "variant_member" if variant_set_id or expression_kind else "independent_layer"
+    if import_mode not in {"variant_member", "replacement", "independent_layer"}:
+        raise DonorError(
+            f"invalid donor import_mode: {import_mode!r} "
+            "(expected 'variant_member', 'replacement', or 'independent_layer')"
+        )
+    if import_mode == "replacement" and target_instance_id is None:
+        raise DonorError("replacement import requires target_instance_id")
+    if import_mode == "variant_member" and expression_kind is None and not (variant_set_id or variant_set):
+        raise DonorError("variant_member import requires an expression semantic or variant_set_id")
     asset_id = asset_id or f"{semantic}__donor"
-    instance_id = instance_id or f"{asset_id}__instance"
+    if import_mode == "replacement":
+        instance_id = target_instance_id
+    else:
+        instance_id = instance_id or f"{asset_id}__instance"
     source_id = donor_id or f"donor:{donor_path.stem}"
     variant_set_id = variant_set_id or variant_set or _default_variant_set(semantic)
+
+    target_instance = document.instances.get(target_instance_id) if target_instance_id else None
+    if target_instance_id and target_instance is None:
+        raise DonorError(f"no such target instance: {target_instance_id!r}")
+    if alignment is None and target_instance is not None and import_mode in {"variant_member", "replacement"}:
+        alignment = target_instance.transform
 
     with Image.open(donor_path) as source_image:
         source_image = source_image.convert("RGBA")
@@ -319,6 +478,9 @@ def import_donor(
         "target_anchor": list(target_anchor) if target_anchor is not None else None,
         "operations": list(operations or []),
         "drift": drift.to_dict(),
+        "import_mode": import_mode,
+        "target_instance_id": target_instance_id,
+        "variant_state": _expression_state(semantic, expression_kind) if expression_kind else None,
     }
     asset_provenance = {"operation": "donor_import", **provenance_detail}
 
@@ -347,26 +509,56 @@ def import_donor(
                 provenance=asset_provenance,
             )
         )
-        if draw_order is None:
-            draw_order = max((i.draw_order for i in document.instances.values()), default=-10) + 10
-        document.add_instance(
-            LayerInstance(
-                id=instance_id,
-                asset_ref=asset_id,
-                slot=slot or semantic,
-                draw_order=draw_order,
-                transform=Transform.from_dict(transform),
+        if import_mode == "replacement":
+            assert target_instance is not None
+            instance_id = target_instance.id
+            target_instance.asset_ref = asset_id
+            target_instance.slot = slot or _normalized_slot(
+                semantic,
+                kind=expression_kind,
+                target_slot=target_instance.slot,
             )
-        )
-        document.composition.setdefault("draw_order", []).append(instance_id)
+            target_instance.plane = None
+            if alignment is not None:
+                target_instance.transform = Transform.from_dict(transform)
+            draw_order = target_instance.draw_order
+        else:
+            if draw_order is None:
+                draw_order = max((i.draw_order for i in document.instances.values()), default=-10) + 10
+            document.add_instance(
+                LayerInstance(
+                    id=instance_id,
+                    asset_ref=asset_id,
+                    slot=slot or _normalized_slot(semantic, kind=expression_kind),
+                    draw_order=draw_order,
+                    transform=Transform.from_dict(transform),
+                )
+            )
+            document.composition.setdefault("draw_order", []).append(instance_id)
         document.provenance.record(instance_id, "donor_import", sources=[source_id], detail=provenance_detail)
         document.provenance.record(asset_id, "donor_import", sources=[source_id], detail=provenance_detail)
 
-        if variant_set_id:
-            if variant_set_id in document.variant_sets:
-                add_member(document, variant_set_id, instance_id)
-            else:
-                add_variant_set(document, variant_set_id, members=[instance_id], default=instance_id)
+        if import_mode == "variant_member":
+            if expression_kind:
+                _configure_expression_variant(
+                    document,
+                    variant_set_id=variant_set_id,
+                    donor_instance_id=instance_id,
+                    kind=expression_kind,
+                    state=_expression_state(semantic, expression_kind),
+                    target_instance_id=target_instance_id,
+                )
+            elif variant_set_id:
+                if variant_set_id in document.variant_sets:
+                    add_member(document, variant_set_id, instance_id)
+                else:
+                    add_variant_set(document, variant_set_id, members=[instance_id], default=instance_id)
+            _auto_expression_preset(
+                document,
+                variant_set_id,
+                instance_id,
+                semantic,
+            )
 
     if image_sources is not None:
         image_sources[instance_id] = image_path

@@ -13,8 +13,9 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle, write_assembly_bundle
@@ -257,6 +258,55 @@ def test_inspector_slot_and_plane_controls_commit(qapp, portrait_bundle: Path):
     plane_index = plane_box.findData(plane)
     plane_box.activated[int].emit(plane_index)
     assert document.instances[instance_id].plane == plane
+
+
+def test_inspector_transform_edit_is_safe_for_tree_selected_linked_layer(qapp, portrait_bundle: Path):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    instance_ids = list(document.instances)[:2]
+    from portrait_composer.links import create_link
+
+    with document.transaction():
+        create_link(document, "linked_transform", instance_ids)
+
+    window = MainWindow()
+    window._display_document(document, image_sources, portrait_bundle, source_map=True, import_warnings=warnings)
+    window.show()
+    qapp.processEvents()
+    index = window.tree_dock.tree.model().index(0, 0)
+    QTest.mouseClick(
+        window.tree_dock.tree.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=window.tree_dock.tree.visualRect(index).center(),
+    )
+    qapp.processEvents()
+
+    x_box = next(
+        box for box in window.inspector_dock.findChildren(QDoubleSpinBox)
+        if box.accessibleName() == "Transform x"
+    )
+    x_box.setFocus()
+    x_box.selectAll()
+    QTest.keyClicks(x_box, "12")
+    QTest.keyClick(x_box, Qt.Key.Key_Enter)
+    qapp.processEvents()
+
+    assert document.instances[instance_ids[0]].transform.x == 12.0
+    assert document.instances[instance_ids[1]].transform.x == 12.0
+
+    y_box = next(
+        box for box in window.inspector_dock.findChildren(QDoubleSpinBox)
+        if box.accessibleName() == "Transform y"
+    )
+    y_box.setFocus()
+    y_box.selectAll()
+    QTest.keyClicks(y_box, "-7")
+    QTest.keyClick(y_box, Qt.Key.Key_Enter)
+    qapp.processEvents()
+
+    assert document.instances[instance_ids[0]].transform.y == -7.0
+    assert document.instances[instance_ids[1]].transform.y == -7.0
+    window.close()
 
 
 def test_save_after_gizmo_edit_matches_core_reference_on_reopen(qapp, portrait_bundle: Path, tmp_path: Path):

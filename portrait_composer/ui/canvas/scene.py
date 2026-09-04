@@ -337,7 +337,15 @@ class CanvasScene(QGraphicsScene):
     # Every mode here is read-only: it renders through the exact same core
     # render_subset() apply_bake_plan itself uses for the derived composite,
     # never a document mutation -- analyze/preview never bakes.
-    def preview_bake_candidate(self, instance_ids: list, mode: str, wipe_fraction: float = 0.5) -> None:
+    def preview_bake_candidate(
+        self,
+        instance_ids: list,
+        mode: str,
+        wipe_fraction: float = 0.5,
+        *,
+        ordered_instance_ids: list | None = None,
+        transform_overrides: dict | None = None,
+    ) -> None:
         if self.document is None or self._committed_reference is None:
             return
         self._stop_flicker()
@@ -345,7 +353,11 @@ class CanvasScene(QGraphicsScene):
         if mode == "before":
             self._set_preview_pixmap(before)
             return
-        after = self._bake_after_image(instance_ids)
+        after = self._bake_after_image(
+            instance_ids,
+            ordered_instance_ids=ordered_instance_ids,
+            transform_overrides=transform_overrides,
+        )
         if after is None:
             self._set_preview_pixmap(before)
             return
@@ -366,7 +378,13 @@ class CanvasScene(QGraphicsScene):
         else:
             self._set_preview_pixmap(before)
 
-    def _bake_after_image(self, instance_ids: list) -> Image.Image | None:
+    def _bake_after_image(
+        self,
+        instance_ids: list,
+        *,
+        ordered_instance_ids: list | None = None,
+        transform_overrides: dict | None = None,
+    ) -> Image.Image | None:
         """The full canvas as it would render if ``instance_ids`` were
         collapsed into their single derived composite -- built by literally
         calling render_subset on just that group (the same call
@@ -382,11 +400,21 @@ class CanvasScene(QGraphicsScene):
             height = canvas.get("height", self._committed_reference.height)
             order = document.composition.get("draw_order", [])
             candidate_set = set(instance_ids)
-            ordered_candidates = [i for i in order if i in candidate_set] or list(instance_ids)
+            if ordered_instance_ids is None:
+                ordered_candidates = [i for i in order if i in candidate_set] or list(instance_ids)
+            else:
+                ordered_candidates = list(dict.fromkeys(ordered_instance_ids))
+                if set(ordered_candidates) != candidate_set or len(ordered_candidates) != len(instance_ids):
+                    return None
             sources = {i: self._resolve_image_path(i) for i in ordered_candidates}
             if any(path is None or not path.exists() for path in sources.values()):
                 return None
-            derived = render_subset(document, sources, ordered_candidates)
+            derived = render_subset(
+                document,
+                sources,
+                ordered_candidates,
+                transform_overrides=transform_overrides,
+            )
 
             preview = Image.new("RGBA", (width, height), (0, 0, 0, 0))
             inserted = False

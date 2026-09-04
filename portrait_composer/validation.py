@@ -140,6 +140,17 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
         active = vs.get("active")
         if active is not None and active not in members:
             errors.append(f"variant_set {vs_id!r}: active {active!r} not in members")
+        for state, state_members in (vs.get("state_groups") or {}).items():
+            if not isinstance(state, str) or not state:
+                errors.append(f"variant_set {vs_id!r}: state group name must be non-empty")
+            if not isinstance(state_members, list) or not state_members:
+                errors.append(f"variant_set {vs_id!r}: state group {state!r} needs at least one member")
+                continue
+            for member in state_members:
+                if member not in members:
+                    errors.append(
+                        f"variant_set {vs_id!r}: state group {state!r} member {member!r} is not in members"
+                    )
 
     # rig intent: regions/attachments must target real instances or slots;
     # values are Composer vocabulary, not AutoRig solver settings.

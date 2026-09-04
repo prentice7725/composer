@@ -6,11 +6,13 @@ import pytest
 import json
 from PIL import Image
 
+from portrait_composer.assets import AssetDefinition
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bake import CAN_BAKE, WARN, analyze_bake
 from portrait_composer.bundle import BundleError, read_assembly_bundle, read_portrait_bundle, write_assembly_bundle
 from portrait_composer.donors import DonorDriftError, import_donor
 from portrait_composer.expressions import apply_expression_preset, create_expression_preset
+from portrait_composer.instances import LayerInstance
 from portrait_composer.rig_intent import add_attachment, set_deformation_scope
 from portrait_composer.secondary_regions import (
     PREFLIGHT_DISABLED,
@@ -157,6 +159,86 @@ def test_c3_donor_import_provenance_matte_roi_and_expression(tmp_path: Path):
     schema = json.loads(Path("schemas/portrait-assembly-v0.2.schema.json").read_text())
     manifest = {"format": "portrait-assembly", "version": "0.2", **document.to_dict()}
     jsonschema.validate(manifest, schema)
+
+
+def test_expression_donor_auto_builds_grouped_eye_and_mouth_states(tmp_path: Path):
+    document, image_sources, _ = _portrait_doc(tmp_path)
+    with document.transaction():
+        for semantic, draw_order in (("eyewhite", 10), ("irides", 11), ("eyelash", 12), ("mouth", 20)):
+            asset_id = f"{semantic}__asset"
+            instance_id = f"{semantic}__instance"
+            document.add_asset(AssetDefinition(id=asset_id, semantic=semantic, planes=[semantic]))
+            document.add_instance(LayerInstance(id=instance_id, asset_ref=asset_id, slot="eye" if semantic != "mouth" else "mouth", draw_order=draw_order))
+            document.composition.setdefault("draw_order", []).append(instance_id)
+
+    blink = tmp_path / "blink.png"
+    Image.new("RGBA", (20, 20), (220, 40, 40, 255)).save(blink)
+    blink_result = import_donor(
+        document,
+        blink,
+        semantic="blink",
+        target_instance_id="eyewhite__instance",
+        image_sources=image_sources,
+        work_dir=tmp_path / "donors",
+    )
+
+    eyes = document.variant_sets["eyes_state"]
+    assert eyes["state_groups"]["open"] == ["eyewhite__instance", "irides__instance", "eyelash__instance"]
+    assert eyes["state_groups"]["closed"] == [blink_result.instance_id]
+    assert eyes["active"] == "eyewhite__instance"
+    assert all(document.instances[item].visible for item in eyes["state_groups"]["open"])
+    assert not document.instances[blink_result.instance_id].visible
+
+    with document.transaction():
+        from portrait_composer.variants import set_active
+
+        set_active(document, "eyes_state", blink_result.instance_id)
+    assert not any(document.instances[item].visible for item in eyes["state_groups"]["open"])
+    assert document.instances[blink_result.instance_id].visible
+
+    talk = tmp_path / "talk_open.png"
+    Image.new("RGBA", (20, 20), (40, 220, 40, 255)).save(talk)
+    talk_result = import_donor(
+        document,
+        talk,
+        semantic="talk_open",
+        target_instance_id="mouth__instance",
+        image_sources=image_sources,
+        work_dir=tmp_path / "donors",
+    )
+    mouth = document.variant_sets["mouth_state"]
+    assert mouth["state_groups"] == {
+        "closed": ["mouth__instance"],
+        "open": [talk_result.instance_id],
+    }
+    assert "expression_talk_open" in document.expressions
+    assert document.expressions["expression_talk_open"]["variants"] == {"mouth_state": talk_result.instance_id}
+    assert document.validate().ok
+
+
+def test_donor_replacement_preserves_target_instance_identity_and_transform(tmp_path: Path):
+    document, image_sources, _ = _portrait_doc(tmp_path)
+    target_id = "topwear__instance"
+    before_transform = document.instances[target_id].transform.to_dict()
+    donor = tmp_path / "replacement.png"
+    Image.new("RGBA", (20, 20), (20, 40, 220, 255)).save(donor)
+
+    result = import_donor(
+        document,
+        donor,
+        semantic="topwear_replacement",
+        import_mode="replacement",
+        target_instance_id=target_id,
+        image_sources=image_sources,
+        work_dir=tmp_path / "donors",
+    )
+
+    assert result.instance_id == target_id
+    assert list(document.instances).count(target_id) == 1
+    assert document.instances[target_id].asset_ref == result.asset_id
+    assert document.instances[target_id].transform.to_dict() == before_transform
+    assert document.instances[target_id].slot == "torso"
+    assert not document.variant_sets
 
 
 def test_assembly_reader_rejects_unknown_minor_version(tmp_path: Path):

@@ -25,6 +25,18 @@ from PySide6.QtGui import QBrush, QColor, QPen
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsItem, QGraphicsRectItem
 
 REGION_HANDLE_ROLE = 35
+
+
+def _encode_handle_role(side: str, name: str) -> str:
+    """Store a Qt-native string instead of a Python tuple in item data."""
+    return f"{side}:{name}"
+
+
+def _decode_handle_role(value):
+    if not isinstance(value, str) or ":" not in value:
+        return None
+    side, name = value.split(":", 1)
+    return (side, name) if side and name else None
 HANDLE_SIZE = 8.0
 MIN_RADIUS = 0.02
 _SIDES = ("left", "right")
@@ -67,7 +79,7 @@ class RegionEditController:
                 handle.setBrush(QBrush(QColor("#c792ff")))
                 handle.setPen(QPen(QColor("#20242b"), 1.0))
                 handle.setZValue(10_600)
-                handle.setData(REGION_HANDLE_ROLE, (side, name))
+                handle.setData(REGION_HANDLE_ROLE, _encode_handle_role(side, name))
                 self.scene.addItem(handle)
                 self._handles[(side, name)] = handle
         self._redraw()
@@ -132,7 +144,7 @@ class RegionEditController:
     def hit_role(self, item):
         if item is None:
             return None
-        return item.data(REGION_HANDLE_ROLE)
+        return _decode_handle_role(item.data(REGION_HANDLE_ROLE))
 
     def begin_drag(self, role: tuple, scene_pos) -> bool:
         if self.geometry is None or self._target_box() is None:

@@ -145,6 +145,8 @@ def apply_candidate(
     semantic: str,
     work_dir: Path,
     profile: Optional[str] = None,
+    ordered_instance_ids: Optional[list] = None,
+    transform_overrides: Optional[dict] = None,
 ) -> tuple:
     """Thin wrapper over bake.apply_bake_plan for one analyzed candidate.
     ``profile`` is stored verbatim in the derived asset's provenance --
@@ -159,6 +161,8 @@ def apply_candidate(
         semantic=semantic,
         work_dir=work_dir,
         profile=profile,
+        ordered_instance_ids=ordered_instance_ids,
+        transform_overrides=transform_overrides,
     )
 
 

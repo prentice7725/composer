@@ -9,6 +9,7 @@ step, matching the canvas gizmo's one-drag-one-transaction contract.
 """
 from __future__ import annotations
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -253,8 +254,21 @@ class InspectorDock(QDockWidget):
         instance_id = self._instance_id
         if window is None or instance_id is None:
             return
-        window.run_command(
-            lambda document, image_sources: set_instance_transform(
-                document, image_sources, instance_id, **{field_name: value}
+
+        # editingFinished can be emitted while QDoubleSpinBox is still
+        # processing the Enter/focus event.  run_command refreshes the
+        # Inspector synchronously, which destroys that editor underneath Qt
+        # and can cause an access violation (especially for linked layers,
+        # where the refresh also rebuilds multiple canvas bounds).  Commit on
+        # the next event-loop turn so the editor's native event has returned.
+        def commit() -> None:
+            document = getattr(window, "document", None)
+            if document is None or instance_id not in document.instances:
+                return
+            window.run_command(
+                lambda document, image_sources: set_instance_transform(
+                    document, image_sources, instance_id, **{field_name: value}
+                )
             )
-        )
+
+        QTimer.singleShot(0, commit)

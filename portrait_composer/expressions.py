@@ -40,7 +40,14 @@ def create_expression_preset(
     if not isinstance(variants, dict) or not variants:
         raise ExpressionError("expression preset needs at least one VariantSet selection")
     canonical_variants = {}
-    aliases = {"mouth_state": "mouth_viseme", "eyes": "eye_state", "brows": "brow_state"}
+    aliases = {
+        "eye_state": "eyes_state",
+        "eyes_state": "eye_state",
+        "mouth_viseme": "mouth_state",
+        "mouth_state": "mouth_viseme",
+        "eyes": "eyes_state",
+        "brows": "brow_state",
+    }
     for set_id, member_id in variants.items():
         lookup_id = set_id if set_id in document.variant_sets else aliases.get(set_id, set_id)
         variant_set = document.variant_sets.get(lookup_id)
@@ -68,7 +75,14 @@ def update_expression_preset(
     # Validate through the same rules as create, without deleting the old
     # preset first.  This keeps a failed direct edit atomic as well as when
     # the caller wraps it in AssemblyDocument.transaction().
-    aliases = {"mouth_state": "mouth_viseme", "eyes": "eye_state", "brows": "brow_state"}
+    aliases = {
+        "eye_state": "eyes_state",
+        "eyes_state": "eye_state",
+        "mouth_viseme": "mouth_state",
+        "mouth_state": "mouth_viseme",
+        "eyes": "eyes_state",
+        "brows": "brow_state",
+    }
     canonical_variants = {}
     for set_id, member_id in variants.items():
         lookup_id = set_id if set_id in document.variant_sets else aliases.get(set_id, set_id)

@@ -81,6 +81,52 @@ def add_member(document: "AssemblyDocument", vs_id: str, member_id: str, *, acti
         set_active(document, vs_id, member_id)
 
 
+def configure_state_groups(
+    document: "AssemblyDocument",
+    vs_id: str,
+    groups: dict[str, list[str]],
+    *,
+    default: str | None = None,
+    active: str | None = None,
+) -> None:
+    """Attach optional multi-layer state groups to an exclusive VariantSet.
+
+    A facial state can be a stack (``eyewhite + irides + eyelash``), while a
+    VariantSet's public members remain ordinary LayerInstance ids.  The
+    optional ``state_groups`` extension keeps that stack atomic for
+    authoring/reference visibility without introducing runtime parameters.
+    """
+    vs = document.variant_sets.get(vs_id)
+    if vs is None:
+        raise VariantSetError(f"no such variant set: {vs_id!r}")
+    normalized: dict[str, list[str]] = {}
+    all_group_members: list[str] = []
+    for state, member_ids in groups.items():
+        if not state:
+            raise VariantSetError("VariantSet state name must be non-empty")
+        unique = list(dict.fromkeys(member_ids))
+        for member_id in unique:
+            if member_id not in document.instances:
+                raise VariantSetError(f"variant set {vs_id!r}: state member {member_id!r} is not an instance")
+        normalized[state] = unique
+        all_group_members.extend(unique)
+
+    members = list(dict.fromkeys([*vs.get("members", []), *all_group_members]))
+    if not members:
+        raise VariantSetError(f"variant set {vs_id!r}: state groups need at least one member")
+    vs["members"] = members
+    vs["state_groups"] = normalized
+    default = default or vs.get("default") or members[0]
+    active = active or vs.get("active") or default
+    if default not in members:
+        raise VariantSetError(f"variant set {vs_id!r}: default {default!r} not in members")
+    if active not in members:
+        raise VariantSetError(f"variant set {vs_id!r}: active {active!r} not in members")
+    vs["default"] = default
+    vs["active"] = active
+    _apply_exclusive_visibility(document, vs_id)
+
+
 def create_or_add_member(
     document: "AssemblyDocument", vs_id: str, member_id: str, *, default: bool = False
 ) -> None:
@@ -128,7 +174,19 @@ def set_active(document: "AssemblyDocument", vs_id: str, member_id: str) -> None
 def _apply_exclusive_visibility(document: "AssemblyDocument", vs_id: str) -> None:
     vs = document.variant_sets[vs_id]
     active = vs["active"]
+    state_groups = vs.get("state_groups") or {}
+    active_group = next(
+        (set(member_ids) for member_ids in state_groups.values() if active in member_ids),
+        {active},
+    )
+    grouped_members = {member_id for member_ids in state_groups.values() for member_id in member_ids}
     for member_id in vs["members"]:
         inst = document.instances.get(member_id)
         if inst is not None:
-            inst.visible = member_id == active
+            inst.visible = member_id in active_group
+    # Keep group members that were added as a visibility stack but are not
+    # exposed as selectable VariantSet members in sync as well.
+    for member_id in grouped_members - set(vs["members"]):
+        inst = document.instances.get(member_id)
+        if inst is not None:
+            inst.visible = member_id in active_group

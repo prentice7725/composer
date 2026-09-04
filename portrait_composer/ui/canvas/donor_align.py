@@ -36,6 +36,20 @@ MIN_EXTENT = 4.0
 _CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
 
 
+def _encode_handle_role(kind: str, detail: str | None = None) -> str:
+    """Keep QGraphicsItem data on Qt's built-in string QVariant path."""
+    return kind if detail is None else f"{kind}:{detail}"
+
+
+def _decode_handle_role(value) -> Optional[tuple[str, str | None]]:
+    if not isinstance(value, str) or not value:
+        return None
+    kind, separator, detail = value.partition(":")
+    if not kind:
+        return None
+    return kind, detail if separator and detail else None
+
+
 def identity_transform() -> dict:
     return {"x": 0.0, "y": 0.0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0}
 
@@ -108,14 +122,14 @@ class DonorAlignController:
             handle.setBrush(QBrush(QColor("#7fffa0")))
             handle.setPen(QPen(QColor("#20242b"), 1.0))
             handle.setZValue(10_500)
-            handle.setData(DONOR_HANDLE_ROLE, ("scale", name))
+            handle.setData(DONOR_HANDLE_ROLE, _encode_handle_role("scale", name))
             self.scene.addItem(handle)
             self._handles[name] = handle
         rotate_handle = QGraphicsEllipseItem(-HANDLE_SIZE / 2, -HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE)
         rotate_handle.setBrush(QBrush(QColor("#7fffa0")))
         rotate_handle.setPen(QPen(QColor("#20242b"), 1.0))
         rotate_handle.setZValue(10_500)
-        rotate_handle.setData(DONOR_HANDLE_ROLE, ("rotate", None))
+        rotate_handle.setData(DONOR_HANDLE_ROLE, _encode_handle_role("rotate"))
         self.scene.addItem(rotate_handle)
         self._handles["rotate"] = rotate_handle
         self._redraw()
@@ -222,10 +236,10 @@ class DonorAlignController:
         self._handles["rotate"].setPos(self._pixmap_item.mapToScene(top_center))
 
     # -- drag ------------------------------------------------------------
-    def hit_role(self, item) -> Optional[tuple]:
+    def hit_role(self, item) -> Optional[tuple[str, str | None]]:
         if item is None:
             return None
-        return item.data(DONOR_HANDLE_ROLE)
+        return _decode_handle_role(item.data(DONOR_HANDLE_ROLE))
 
     def begin_drag(self, role: tuple, scene_pos: QPointF) -> bool:
         if self._pixmap_item is None:

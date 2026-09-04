@@ -87,11 +87,21 @@ class TreeDock(QDockWidget):
         self.model.load_document(document, diagnostics)
         self._refresh_selection(self.selection_model.instance_ids)
 
-    def _clicked(self, proxy_index) -> None:
-        source_index = self.proxy.mapToSource(proxy_index)
-        instance_id = self.model.itemFromIndex(source_index).data(INSTANCE_ROLE)
-        if instance_id:
-            self.selection_model.select(str(instance_id))
+    def _clicked(self, _proxy_index) -> None:
+        """Mirror Qt's complete selection, including Ctrl/Shift ranges.
+
+        The view owns selection gestures; this shared model is only the
+        cross-widget projection. Re-selecting the clicked row here would
+        erase ExtendedSelection state on every Ctrl+Click.
+        """
+        instance_ids = []
+        for index in self.tree.selectionModel().selectedRows():
+            source_index = self.proxy.mapToSource(index)
+            item = self.model.itemFromIndex(source_index)
+            instance_id = item.data(INSTANCE_ROLE) if item is not None else None
+            if instance_id:
+                instance_ids.append(str(instance_id))
+        self.selection_model.set_instances(instance_ids)
 
     def _refresh_selection(self, selected_ids: list[str]) -> None:
         selected_sources = set()

@@ -177,7 +177,16 @@
         "mode": { "type": "string", "enum": ["exclusive"] },
         "default": { "type": "string" },
         "active": { "type": "string" },
-        "members": { "type": "array", "items": { "type": "string" } }
+        "members": { "type": "array", "items": { "type": "string" } },
+        "state_groups": {
+          "type": "object",
+          "description": "Optional Composer authoring groups for multi-layer states such as an eye stack.",
+          "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        },
+        "state_labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
       }
     },
     "expressionPreset": {

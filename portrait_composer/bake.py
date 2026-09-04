@@ -219,6 +219,8 @@ def apply_bake_plan(
     work_dir: Path,
     slot: Optional[str] = None,
     profile: Optional[str] = None,
+    ordered_instance_ids: Optional[list] = None,
+    transform_overrides: Optional[dict] = None,
 ) -> tuple:
     """Bakes ``instance_ids`` into one derived AssetDefinition + LayerInstance.
 
@@ -238,9 +240,32 @@ def apply_bake_plan(
 
     instance_ids = list(instance_ids)
     draw_order = document.composition.get("draw_order", [])
-    ordered_ids = [i for i in draw_order if i in instance_ids] or instance_ids
+    if ordered_instance_ids is None:
+        ordered_ids = [i for i in draw_order if i in instance_ids] or instance_ids
+    else:
+        ordered_ids = list(dict.fromkeys(ordered_instance_ids))
+        if set(ordered_ids) != set(instance_ids) or len(ordered_ids) != len(instance_ids):
+            raise ValueError("ordered_instance_ids must contain exactly the bake source instances")
 
-    composite = render_subset(document, image_sources, ordered_ids)
+    composite = render_subset(
+        document,
+        image_sources,
+        ordered_ids,
+        transform_overrides=transform_overrides,
+    )
+    staging = None
+    if ordered_instance_ids is not None or transform_overrides is not None:
+        staging = {
+            "ordered_instance_ids": list(ordered_ids),
+            "transform_overrides": {
+                instance_id: (
+                    value.to_dict()
+                    if hasattr(value, "to_dict")
+                    else dict(value)
+                )
+                for instance_id, value in (transform_overrides or {}).items()
+            },
+        }
 
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -275,6 +300,7 @@ def apply_bake_plan(
                 "profile": profile,
                 "timestamp": time.time(),
                 "version": BAKE_VERSION,
+                **({"staging": staging} if staging is not None else {}),
             },
         )
         document.add_asset(derived_asset)
@@ -302,12 +328,14 @@ def apply_bake_plan(
         document.composition["draw_order"] = new_order
 
         for target_id in (derived_inst_id, derived_id):
+            extra = {"detail": sources_detail, "profile": profile}
+            if staging is not None:
+                extra["staging"] = staging
             document.provenance.record(
                 target_id,
                 operation="bake",
-                sources=list(instance_ids),
-                detail=sources_detail,
-                profile=profile,
+                sources=list(ordered_ids),
+                **extra,
             )
 
     image_sources[derived_inst_id] = image_path

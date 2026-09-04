@@ -34,6 +34,26 @@ MIN_EXTENT = 4.0
 _CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
 
 
+def _encode_role(kind: str, detail: str | None = None) -> str:
+    """Store only Qt built-in data in QGraphicsItem user data.
+
+    Passing Python tuples through ``QGraphicsItem.setData`` relies on a
+    PySide QVariant wrapper.  On some Qt/PySide Windows combinations that
+    wrapper can later be reconstructed as an invalid metatype.  The role is
+    a tiny protocol, so a string is both safer and sufficient.
+    """
+    return kind if detail is None else f"{kind}:{detail}"
+
+
+def _decode_role(value) -> Optional[tuple[str, str | None]]:
+    if not isinstance(value, str) or not value:
+        return None
+    kind, separator, detail = value.partition(":")
+    if not kind:
+        return None
+    return kind, detail if separator and detail else None
+
+
 @dataclass
 class _Drag:
     kind: str
@@ -72,14 +92,14 @@ class TransformGizmo:
             handle.setBrush(QBrush(QColor("#ffd166")))
             handle.setPen(QPen(QColor("#20242b"), 1.0))
             handle.setZValue(10_000)
-            handle.setData(GIZMO_ROLE, ("scale", name))
+            handle.setData(GIZMO_ROLE, _encode_role("scale", name))
             self.scene.addItem(handle)
             self._handles[name] = handle
         rotate_handle = QGraphicsEllipseItem(-HANDLE_SIZE / 2, -HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE)
         rotate_handle.setBrush(QBrush(QColor("#59d4ff")))
         rotate_handle.setPen(QPen(QColor("#20242b"), 1.0))
         rotate_handle.setZValue(10_000)
-        rotate_handle.setData(GIZMO_ROLE, ("rotate", None))
+        rotate_handle.setData(GIZMO_ROLE, _encode_role("rotate"))
         self.scene.addItem(rotate_handle)
         self._handles["rotate"] = rotate_handle
         self.reposition()
@@ -108,10 +128,10 @@ class TransformGizmo:
         self._handles["rotate"].setPos(self.target_item.mapToScene(top_center))
 
     # -- drag ------------------------------------------------------------
-    def hit_role(self, item) -> Optional[tuple]:
+    def hit_role(self, item) -> Optional[tuple[str, str | None]]:
         if item is None:
             return None
-        return item.data(GIZMO_ROLE)
+        return _decode_role(item.data(GIZMO_ROLE))
 
     def begin_drag(self, role: tuple, scene_pos: QPointF) -> bool:
         if self.target_item is None or self.instance_id is None:

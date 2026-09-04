@@ -10,12 +10,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
 from PySide6.QtGui import QKeyEvent, QStandardItem, QStandardItemModel
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle
 from portrait_composer.ui.main_window import MainWindow
-from portrait_composer.ui.models.assembly_tree import AssemblyTreeFilter, META_ROLE, WARNING_ROLE
+from portrait_composer.ui.models.assembly_tree import AssemblyTreeFilter, INSTANCE_ROLE, META_ROLE, WARNING_ROLE
 
 
 @pytest.fixture(scope="module")
@@ -164,4 +165,39 @@ def test_escape_cancels_gizmo_before_generic_pending_cancel(qapp, portrait_bundl
 
     assert gizmo.drag is None
     assert generic_called == []
+    window.close()
+
+
+def test_tree_selection_after_document_load_uses_a_fresh_proxy_model(
+    qapp, portrait_bundle: Path, tmp_path: Path
+):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    window = MainWindow(settings=_settings(tmp_path / "selection.ini"))
+    window._display_document(document, image_sources, portrait_bundle, source_map=True, import_warnings=warnings)
+    window.show()
+    qapp.processEvents()
+
+    assert window.tree_dock.proxy.rowCount() == window.tree_dock.model.rowCount()
+    index = window.tree_dock.proxy.index(0, 0)
+    QTest.mouseClick(
+        window.tree_dock.tree.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        window.tree_dock.tree.visualRect(index).center(),
+    )
+    qapp.processEvents()
+
+    assert window.selection_model.instance_ids == [index.data(INSTANCE_ROLE)]
+
+    second = window.tree_dock.proxy.index(1, 0)
+    QTest.mouseClick(
+        window.tree_dock.tree.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+        window.tree_dock.tree.visualRect(second).center(),
+    )
+    qapp.processEvents()
+
+    assert window.selection_model.instance_ids == [index.data(INSTANCE_ROLE), second.data(INSTANCE_ROLE)]
     window.close()

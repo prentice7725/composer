@@ -240,7 +240,11 @@ class _ExpressionEditor(QWidget):
             combo = QComboBox()
             combo.setAccessibleName(f"Expression state {vs_id}")
             for member_id in vs["members"]:
-                combo.addItem(_label_for(document, member_id), member_id)
+                state_label = (vs.get("state_labels") or {}).get(member_id)
+                label = _label_for(document, member_id)
+                if state_label:
+                    label = f"{state_label} · {label}"
+                combo.addItem(label, member_id)
             wanted = selections.get(vs_id, vs.get("active"))
             index = combo.findData(wanted)
             if index >= 0:

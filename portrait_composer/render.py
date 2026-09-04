@@ -58,6 +58,7 @@ def _composite(
     instance_ids: list,
     resolve_path: Callable[[str], Optional[Path]],
     canvas_size: tuple,
+    transform_overrides: dict | None = None,
 ) -> Image.Image:
     width, height = canvas_size
     composite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -75,7 +76,12 @@ def _composite(
                 r, g, b, a = im.split()
                 a = a.point(lambda v: round(v * inst.opacity))
                 im = Image.merge("RGBA", (r, g, b, a))
-            im, (x, y) = _positioned(im, inst.transform)
+            transform = (transform_overrides or {}).get(inst_id, inst.transform)
+            if isinstance(transform, dict):
+                from .instances import Transform
+
+                transform = Transform.from_dict(transform)
+            im, (x, y) = _positioned(im, transform)
             composite.alpha_composite(im, dest=(x, y))
 
     return composite
@@ -102,7 +108,13 @@ def render_reference(document: "AssemblyDocument", layers_dir: Path) -> Image.Im
     return _composite(document, draw_order, lambda iid: layer_image_path(layers_dir, iid), (width, height))
 
 
-def render_subset(document: "AssemblyDocument", image_sources: dict, instance_ids: list) -> Image.Image:
+def render_subset(
+    document: "AssemblyDocument",
+    image_sources: dict,
+    instance_ids: list,
+    *,
+    transform_overrides: dict | None = None,
+) -> Image.Image:
     """Composites just ``instance_ids`` (in the given order), resolving each
     one's image through ``image_sources`` ({instance_id: Path}) instead of
     an on-disk ``layers/`` convention. Requires ``composition.canvas`` to
@@ -113,4 +125,10 @@ def render_subset(document: "AssemblyDocument", image_sources: dict, instance_id
     if width is None or height is None:
         raise ValueError("render_subset requires document.composition['canvas'] to be set")
 
-    return _composite(document, instance_ids, lambda iid: image_sources.get(iid), (width, height))
+    return _composite(
+        document,
+        instance_ids,
+        lambda iid: image_sources.get(iid),
+        (width, height),
+        transform_overrides=transform_overrides,
+    )

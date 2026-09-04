@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...donors import check_drift
+from ...donors import check_drift, expression_donor_kind
 
 MODES = ("composite", "target_only", "donor_only", "flicker", "difference")
 
@@ -53,12 +54,16 @@ def _target_info(main_window):
         canvas.get("width", scaled_w),
         canvas.get("height", scaled_h),
     )
+    target_box = {"x": instance.transform.x, "y": instance.transform.y, "width": scaled_w, "height": scaled_h}
     return {
         "instance_id": instance_id,
         "semantic": asset.semantic if asset else instance.asset_ref,
-        "roi": {"x": instance.transform.x, "y": instance.transform.y, "width": scaled_w, "height": scaled_h},
+        "roi": target_box,
         "canvas_size": canvas_size,
         "rotation": instance.transform.rotation,
+        "transform": instance.transform.to_dict(),
+        "slot": instance.slot,
+        "anchor": (target_box["x"] + target_box["width"] / 2.0, target_box["y"] + target_box["height"] / 2.0),
     }
 
 
@@ -84,7 +89,20 @@ class DonorWorkbench(QWidget):
         form = QFormLayout()
         self.semantic_field = QLineEdit()
         self.semantic_field.setAccessibleName("Donor semantic")
+        self.semantic_field.textChanged.connect(self._semantic_changed)
         form.addRow("Semantic", self.semantic_field)
+        self.import_mode = QComboBox()
+        self.import_mode.addItem("Variant Member", "variant_member")
+        self.import_mode.addItem("Replacement", "replacement")
+        self.import_mode.addItem("Independent Layer", "independent_layer")
+        self.import_mode.setCurrentIndex(self.import_mode.findData("independent_layer"))
+        self.import_mode.setAccessibleName("Donor import mode")
+        self.import_mode.setToolTip(
+            "Expression-like donors default to a VariantSet member; choose Replacement or Independent Layer explicitly."
+        )
+        self.import_mode.activated.connect(lambda _index: setattr(self, "_import_mode_locked", True))
+        self._import_mode_locked = False
+        form.addRow("Import as", self.import_mode)
         outer.addLayout(form)
 
         mode_row = QHBoxLayout()
@@ -135,6 +153,10 @@ class DonorWorkbench(QWidget):
         self._metrics_timer.setInterval(120)
         self._metrics_timer.timeout.connect(self._refresh_metrics)
 
+    def _semantic_changed(self, semantic: str) -> None:
+        if not self._import_mode_locked and expression_donor_kind(semantic):
+            self.import_mode.setCurrentIndex(self.import_mode.findData("variant_member"))
+
     def _set_controls_enabled(self, enabled: bool) -> None:
         for widget in (self.semantic_field, self.opacity_slider, self.allow_drift_box, self.apply_button, self.clear_button):
             widget.setEnabled(enabled)
@@ -149,6 +171,7 @@ class DonorWorkbench(QWidget):
             self.target_label.setText(f"Target: {info['semantic']} ({info['instance_id']})")
             if not self.semantic_field.text():
                 self.semantic_field.setText(info["semantic"])
+            self._semantic_changed(self.semantic_field.text())
 
     # -- import / clear ---------------------------------------------------
     def _pick_donor(self) -> None:
@@ -168,7 +191,9 @@ class DonorWorkbench(QWidget):
 
         info = _target_info(self.main_window)
         donor_w, donor_h = self._donor_image.size
-        if info is not None:
+        if info is not None and expression_donor_kind(self.semantic_field.text() or info["semantic"]):
+            initial = dict(info["transform"])
+        elif info is not None:
             target_box = info["roi"]
             center_x = target_box["x"] + target_box["width"] / 2.0
             center_y = target_box["y"] + target_box["height"] / 2.0
@@ -270,6 +295,9 @@ class DonorWorkbench(QWidget):
         target_size = info["canvas_size"] if info else None
         target_rotation = info["rotation"] if info else 0.0
         donor_path = self._donor_path
+        import_mode = self.import_mode.currentData() or "independent_layer"
+        target_instance_id = info["instance_id"] if info and import_mode in {"variant_member", "replacement"} else None
+        target_anchor = info["anchor"] if target_instance_id else None
 
         result_holder: dict = {}
 
@@ -287,6 +315,9 @@ class DonorWorkbench(QWidget):
                 target_size=target_size,
                 target_rotation=target_rotation,
                 allow_drift=allow_drift,
+                import_mode=import_mode,
+                target_instance_id=target_instance_id,
+                target_anchor=target_anchor,
             )
 
         if self.main_window.run_command(commit):
@@ -294,3 +325,4 @@ class DonorWorkbench(QWidget):
             self.clear_ghost()
             if result is not None:
                 self.main_window.selection_model.select(result.instance_id)
+                self.main_window.set_context("VARIANTS" if result.variant_set_id else "ASSEMBLE")

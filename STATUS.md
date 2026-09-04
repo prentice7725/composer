@@ -287,6 +287,7 @@ core/CLI commands remain usable without the GUI extra.
 - [x] C5-E Donor Align workspace and drift-gated import
 - [x] C5-F RigIntent / Secondary Region workspace
 - [x] C5-G Bake Analysis / Preview / Apply workspace
+- [x] C5-G manual `Bake Selected` analysis for the current multi-selection
 
 ## C5-H -- Diagnostics / Provenance / Validation
 

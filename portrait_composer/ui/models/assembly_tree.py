@@ -48,6 +48,7 @@ class AssemblyTreeModel(QStandardItemModel):
         for diagnostic in diagnostics or []:
             if diagnostic.target_id and diagnostic.severity in {"WARN", "ERROR"}:
                 warning_counts[diagnostic.target_id] = warning_counts.get(diagnostic.target_id, 0) + 1
+        self.beginResetModel()
         self.blockSignals(True)
         try:
             self.removeRows(0, self.rowCount())
@@ -121,6 +122,7 @@ class AssemblyTreeModel(QStandardItemModel):
                 self.appendRow(item)
         finally:
             self.blockSignals(False)
+            self.endResetModel()
 
 
 class AssemblyTreeFilter(QSortFilterProxyModel):
@@ -132,15 +134,13 @@ class AssemblyTreeFilter(QSortFilterProxyModel):
         self.selected_source: str | None = None
 
     def set_filter_mode(self, mode: str) -> None:
+        self.beginFilterChange()
         self.mode = mode or "All"
-        self._refresh_filter()
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
     def set_selected_source(self, source: str | None) -> None:
-        self.selected_source = source
-        self._refresh_filter()
-
-    def _refresh_filter(self) -> None:
         self.beginFilterChange()
+        self.selected_source = source
         self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:

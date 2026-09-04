@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QListWidget
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bake import CAN_BAKE, WARN
@@ -54,6 +54,22 @@ def test_warn_candidate_requires_explicit_acknowledgement_before_apply(window):
     assert card.apply_button.isEnabled()
     card.acknowledge_box.setChecked(False)
     assert not card.apply_button.isEnabled()
+
+
+def test_bake_output_layer_name_is_user_editable_and_used_for_derived_layer(window):
+    for instance_id in window.document.instances:
+        set_deformation_scope(window.document, instance_id, "rigid")
+    window.set_context("BAKE")
+    card = window.bake_workbench._cards[0]
+    card.output_name.setText("torso_with_handwear_v2")
+
+    assert card._output_name() == "torso_with_handwear_v2"
+    assert card.apply_button.isEnabled()
+    card._apply()
+
+    derived_id = "torso_with_handwear_v2__instance"
+    assert derived_id in window.document.instances
+    assert "torso_with_handwear_v2" in window.document.assets
 
 
 def test_block_candidate_apply_button_stays_disabled(window):
@@ -129,3 +145,85 @@ def test_leaving_bake_context_restores_the_committed_reference(window):
 
     expected = QPixmap.fromImage(_qimage(scene._committed_reference))
     assert scene._reference_item.pixmap().toImage() == expected.toImage()
+
+
+def test_bake_context_reopens_hidden_workbench_dock(window, qapp):
+    window.show()
+    qapp.processEvents()
+    window.workbench_dock.hide()
+    assert not window.workbench_dock.isVisible()
+
+    window.set_context("ASSEMBLE")
+    qapp.processEvents()
+    assert not window.workbench_dock.isVisible()
+
+    window.set_context("BAKE")
+    qapp.processEvents()
+
+    assert window.workbench_dock.isVisible()
+    assert abs(window.workbench_dock.height() - window.WORKBENCH_DEFAULT_HEIGHT) <= 20
+
+    view_menu = next(
+        action.menu()
+        for action in window.menuBar().actions()
+        if action.text() == "View"
+    )
+    view_action_texts = {action.text() for action in view_menu.actions()}
+    assert "Context Workbench" in view_action_texts
+    assert "Diagnostics / Assembly Status" in view_action_texts
+
+
+def test_bake_candidate_card_uses_available_height_for_sources_and_apply(window, qapp):
+    window.show()
+    window.set_context("BAKE")
+    qapp.processEvents()
+
+    wb = window.bake_workbench
+    card = wb._cards[0]
+    source_list = card.findChildren(QListWidget)
+
+    assert card.geometry().bottom() >= wb.cards_body.rect().bottom() - 4
+    assert source_list and source_list[0].height() >= 80
+    assert card.apply_button.geometry().bottom() >= card.height() - 16
+
+
+def test_bake_staging_edits_order_and_transform_without_mutating_assembly(window, qapp):
+    window.show()
+    window.set_context("BAKE")
+    qapp.processEvents()
+
+    wb = window.bake_workbench
+    card = wb._cards[0]
+    before = window.document.to_dict()
+    original_order = list(card._staged_order)
+    selected_id = original_order[0]
+
+    card.sources.setCurrentRow(0)
+    card._move_source(1)
+    card._toggle_source_editor()
+    card.source_fields["x"].setValue(17.0)
+    card.source_fields["x"].editingFinished.emit()
+    qapp.processEvents()
+
+    assert card._staged_order != original_order
+    assert card._staged_transforms[selected_id].x == 17.0
+    assert window.document.to_dict() == before
+
+    card._reset_staging()
+    assert card._staged_order == original_order
+    assert card._staged_transforms[selected_id].x == 0.0
+    assert window.document.to_dict() == before
+
+
+def test_bake_selected_analyzes_the_current_multi_selection(window):
+    selected = list(window.document.instances)[:2]
+    window.selection_model.set_instances(selected)
+    window.set_context("BAKE")
+    wb = window.bake_workbench
+
+    assert wb.bake_selected_button.isEnabled()
+    wb._analyze_selected()
+
+    assert len(wb._cards) == 1
+    assert wb._cards[0].candidate.label == "selected_layers"
+    assert wb._cards[0].candidate.instance_ids == selected
