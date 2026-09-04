@@ -9,14 +9,33 @@ step, matching the canvas gizmo's one-drag-one-transaction contract.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QCheckBox, QDockWidget, QDoubleSpinBox, QFormLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDockWidget,
+    QDoubleSpinBox,
+    QFormLayout,
+    QLabel,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ..commands import set_instance_opacity, set_instance_transform, set_instance_visible
+from ...slots import SLOT_VOCABULARY
+from ..commands import (
+    set_instance_opacity,
+    set_instance_plane,
+    set_instance_slot,
+    set_instance_transform,
+    set_instance_visible,
+)
+from ..diagnostics import provenance_text
 
 
 class InspectorDock(QDockWidget):
     def __init__(self, selection_model, parent=None):
         super().__init__("Inspector", parent)
+        self.setObjectName("inspectorDock")
         self.selection_model = selection_model
         self.body = QWidget()
         self.layout = QVBoxLayout(self.body)
@@ -56,9 +75,53 @@ class InspectorDock(QDockWidget):
         self.form.addRow(QLabel("Identity"), QLabel(instance_id))
         self.form.addRow(QLabel("Asset"), QLabel(instance.asset_ref))
         self.form.addRow(QLabel("Semantic"), QLabel(asset.semantic if asset else "—"))
-        self.form.addRow(QLabel("Slot"), QLabel(instance.slot))
-        self.form.addRow(QLabel("Plane"), QLabel(instance.plane or "—"))
+        slot_box = QComboBox()
+        slot_box.setEditable(True)
+        slot_box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        slot_box.addItems(SLOT_VOCABULARY)
+        slot_box.setCurrentText(instance.slot)
+        slot_box.setAccessibleName("Instance slot")
+        slot_box.activated.connect(lambda _index, combo=slot_box: self._commit_slot(combo.currentText()))
+        slot_box.lineEdit().editingFinished.connect(lambda combo=slot_box: self._commit_slot(combo.currentText()))
+        self.form.addRow(QLabel("Slot"), slot_box)
+
+        plane_box = QComboBox()
+        plane_box.addItem("(default)", None)
+        for plane in asset.planes if asset else []:
+            plane_box.addItem(plane, plane)
+        plane_index = plane_box.findData(instance.plane)
+        plane_box.setCurrentIndex(plane_index if plane_index >= 0 else 0)
+        plane_box.setAccessibleName("Instance plane")
+        plane_box.activated.connect(
+            lambda index, combo=plane_box: self._commit_plane(combo.itemData(index))
+        )
+        self.form.addRow(QLabel("Plane"), plane_box)
         self.form.addRow(QLabel("Draw order"), QLabel(str(instance.draw_order)))
+
+        window = self._main_window()
+        diagnostics = (
+            [
+                diagnostic
+                for diagnostic in getattr(window, "diagnostics", [])
+                if diagnostic.target_id in {instance_id, instance.asset_ref}
+            ]
+            if window is not None
+            else []
+        )
+        if diagnostics:
+            warnings = QTextEdit()
+            warnings.setReadOnly(True)
+            warnings.setAccessibleName("Instance diagnostics")
+            warnings.setPlainText("\n".join(f"[{item.severity}] {item.message}" for item in diagnostics))
+            warnings.setMaximumHeight(110)
+            self.form.addRow(QLabel("Warnings"), warnings)
+
+        provenance = QTextEdit()
+        provenance.setReadOnly(True)
+        provenance.setAccessibleName("Instance provenance")
+        provenance.setPlainText(provenance_text(document, instance_id))
+        provenance.setMaximumHeight(150)
+        self.form.addRow(QLabel("Provenance"), provenance)
 
         visible_box = QCheckBox()
         visible_box.setAccessibleName("Instance visible")
@@ -101,6 +164,32 @@ class InspectorDock(QDockWidget):
             return
         window.run_command(
             lambda document, image_sources: set_instance_visible(document, image_sources, instance_id, checked)
+        )
+
+    def _commit_slot(self, slot: str) -> None:
+        window = self._main_window()
+        instance_id = self._instance_id
+        if window is None or instance_id is None or not slot:
+            return
+        document = getattr(window, "document", None)
+        if document is not None and document.instances.get(instance_id, None) is not None:
+            if document.instances[instance_id].slot == slot:
+                return
+        window.run_command(
+            lambda document, image_sources: set_instance_slot(document, image_sources, instance_id, slot)
+        )
+
+    def _commit_plane(self, plane: str | None) -> None:
+        window = self._main_window()
+        instance_id = self._instance_id
+        if window is None or instance_id is None:
+            return
+        document = getattr(window, "document", None)
+        if document is not None and document.instances.get(instance_id, None) is not None:
+            if document.instances[instance_id].plane == plane:
+                return
+        window.run_command(
+            lambda document, image_sources: set_instance_plane(document, image_sources, instance_id, plane)
         )
 
     def _commit_opacity(self, value: float) -> None:

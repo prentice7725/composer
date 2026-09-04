@@ -264,7 +264,7 @@ Not done (out of locked C2 scope, left for later phases):
 The Composer does not implement AutoRig mesh/deformer math, constraint
 solving, runtime parameter binding, or physics constants.
 
-## C5-A -- GUI Shell / Canvas / Tree / Inspector
+## C5-A~G -- GUI Authoring Surfaces
 
 Implemented as an optional PySide6 client under `portrait_composer/ui/`.
 The public facade in `gui.py` and the `gui` CLI command import PySide6 lazily;
@@ -280,6 +280,32 @@ core/CLI commands remain usable without the GUI extra.
 - [x] Canvas pan/zoom/fit and visibility display
 - [x] headless facade/import isolation tests without PySide6
 
-C5-B onward (transform gizmos, Harvest/Donor/Rig/Bake workbenches,
-diagnostics navigation, and workspace persistence) remains intentionally
-out of this first GUI shell implementation.
+- [x] C5-B transform gizmo, visibility, draw-order reorder, slot/plane editing,
+  and undo/redo command wiring
+- [x] C5-C Harvest source pool, candidate preview/apply, and provenance
+- [x] C5-D VariantSet / Expression workspace
+- [x] C5-E Donor Align workspace and drift-gated import
+- [x] C5-F RigIntent / Secondary Region workspace
+- [x] C5-G Bake Analysis / Preview / Apply workspace
+
+## C5-H -- Diagnostics / Provenance / Validation
+
+- [x] read-only diagnostics list from core validation and import warnings
+- [x] Tree warning badges and filter-independent diagnostics visibility
+- [x] warning click-to-target with selection, reveal, and fit
+- [x] read-only Inspector warning and provenance sections
+- [x] clickable Assembly Status checklist
+
+## C5-I -- Workspace Persistence / Polish
+
+- [x] QSettings-backed dock layout, window geometry, and panel-state persistence
+- [x] last context/workspace restoration and Assembly Tree filter restoration
+- [x] recent Assembly/Portrait input paths with bounded, deduplicated menu
+- [x] optional canvas zoom/pan restoration after a document is loaded
+- [x] lightweight reference-render timing in the status bar for performance visibility
+- [x] accessibility names and action tooltips on the implemented controls
+- [x] settings stored outside Assembly Bundle manifests
+
+Deferred by design: user-editable shortcut preferences and a full profiling
+timeline/export surface. The current render timing is diagnostic feedback,
+not a replacement for AutoRig/runtime profiling.

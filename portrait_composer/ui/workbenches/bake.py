@@ -205,6 +205,7 @@ class BakeWorkbench(QWidget):
 
     def refresh(self) -> None:
         document = self.main_window.document
+        self.main_window.session.bake_analyzed = document is not None
         while self.cards_layout.count() > 1:
             item = self.cards_layout.takeAt(0)
             widget = item.widget()

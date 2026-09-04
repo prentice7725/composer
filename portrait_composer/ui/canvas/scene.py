@@ -1,6 +1,7 @@
 """Core-rendered reference scene with a direct-manipulation transform gizmo."""
 from __future__ import annotations
 
+from time import perf_counter
 from pathlib import Path
 
 from PIL import Image, ImageChops
@@ -39,6 +40,7 @@ class CanvasScene(QGraphicsScene):
         self._flicker_timer: QTimer | None = None
         self._flicker_frames: tuple[Image.Image, Image.Image] | None = None
         self._flicker_phase = False
+        self.last_render_ms = 0.0
         self._donor_flicker_timer: QTimer | None = None
         self._donor_flicker_phase = False
         self.gizmo = TransformGizmo(self)
@@ -68,6 +70,7 @@ class CanvasScene(QGraphicsScene):
         canvas = document.composition.get("canvas") or {}
         width, height = canvas.get("width"), canvas.get("height")
         order = document.composition.get("draw_order", [])
+        render_started = perf_counter()
         if image_sources is None:
             # Written Assembly Bundles use the canonical layers/<instance>.png
             # convention and the reference renderer remains the truth source.
@@ -76,6 +79,7 @@ class CanvasScene(QGraphicsScene):
             # Newly imported Portrait Bundles have producer layer names, so use
             # the same core compositor through its explicit source map.
             reference = render_subset(document, image_sources, order)
+        self.last_render_ms = (perf_counter() - render_started) * 1000.0
         width, height = reference.size if width is None or height is None else (width, height)
         self._committed_reference = reference
         self._reference_item = self.addPixmap(QPixmap.fromImage(_qimage(reference)))

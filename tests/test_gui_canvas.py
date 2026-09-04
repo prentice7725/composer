@@ -215,6 +215,50 @@ def test_draw_order_nudge_shortcut_moves_selected_instance(qapp, portrait_bundle
     assert window.document.composition["draw_order"][-1] == first
 
 
+def test_tree_drop_reorders_draw_order_in_one_transaction(qapp, portrait_bundle: Path):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    window = MainWindow()
+    window._display_document(document, image_sources, portrait_bundle, source_map=True, import_warnings=warnings)
+    first = document.composition["draw_order"][0]
+    before_revision = document.history.revision
+    window.selection_model.select(first)
+
+    class _DropAtEnd:
+        def position(self):
+            return QPointF(2.0, 10000.0)
+
+    assert window.tree_dock._drop_reorder(_DropAtEnd()) is True
+    assert document.composition["draw_order"][-1] == first
+    assert document.history.revision == before_revision + 1
+    window.undo()
+    assert document.composition["draw_order"][0] == first
+
+
+def test_inspector_slot_and_plane_controls_commit(qapp, portrait_bundle: Path):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    window = MainWindow()
+    window._display_document(document, image_sources, portrait_bundle, source_map=True, import_warnings=warnings)
+    instance_id = next(iter(document.instances))
+    window.selection_model.select(instance_id)
+
+    from PySide6.QtWidgets import QComboBox
+
+    boxes = window.inspector_dock.findChildren(QComboBox)
+    assert len(boxes) == 2
+    slot_box, plane_box = boxes
+    slot_box.setCurrentText("torso")
+    slot_box.lineEdit().editingFinished.emit()
+    assert document.instances[instance_id].slot == "torso"
+
+    plane = document.assets[document.instances[instance_id].asset_ref].planes[0]
+    plane_box = window.inspector_dock.findChildren(QComboBox)[1]
+    plane_index = plane_box.findData(plane)
+    plane_box.activated[int].emit(plane_index)
+    assert document.instances[instance_id].plane == plane
+
+
 def test_save_after_gizmo_edit_matches_core_reference_on_reopen(qapp, portrait_bundle: Path, tmp_path: Path):
     bundle = read_portrait_bundle(portrait_bundle)
     document, image_sources, warnings = identity_assembly(bundle)

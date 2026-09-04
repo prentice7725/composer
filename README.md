@@ -9,10 +9,11 @@ Its responsibility is **assembly truth**: what a character is built from,
 where it's placed, and what may move -- never mesh/deformation/physics.
 
 Full spec: [docs/PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md](docs/PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md).
-Current implementation status: [STATUS.md](STATUS.md) (**C0-C4 library
-features implemented**; GUI and AutoRig runtime remain separate concerns).
+Current implementation status: [STATUS.md](STATUS.md) (**C0-C4 library and
+C5-A through C5-I GUI features implemented**; AutoRig runtime remains a
+separate concern).
 
-The first GUI shell (C5-A) is implemented as an optional PySide6 client. To
+The Composer GUI (C5-A through C5-I) is implemented as an optional PySide6 client. To
 use it, install `pip install -e ".[gui]"` and run
 `portrait-composer-gui [ASSEMBLY_BUNDLE]`. Core/CLI commands do not require
 PySide6.

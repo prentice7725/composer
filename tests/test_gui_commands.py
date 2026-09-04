@@ -16,6 +16,8 @@ from portrait_composer.links import create_link
 from portrait_composer.ui.commands import (
     nudge_draw_order,
     reorder_draw_order,
+    set_instance_plane,
+    set_instance_slot,
     set_instance_opacity,
     set_instance_transform,
     set_instance_visible,
@@ -147,3 +149,23 @@ def test_reorder_draw_order_matches_set_draw_order(loaded):
     reversed_order = list(reversed(order))
     reorder_draw_order(document, reversed_order)
     assert document.composition["draw_order"] == reversed_order
+
+
+def test_slot_and_plane_edits_are_one_undo_step(loaded):
+    document, image_sources = loaded
+    instance_id = next(iter(document.instances))
+    asset = document.assets[document.instances[instance_id].asset_ref]
+    plane = asset.planes[0]
+    revision_before = document.history.revision
+
+    set_instance_slot(document, image_sources, instance_id, "torso")
+    set_instance_plane(document, image_sources, instance_id, plane)
+
+    assert document.instances[instance_id].slot == "torso"
+    assert document.instances[instance_id].plane == plane
+    assert document.history.revision == revision_before + 2
+
+    document.undo()
+    assert document.instances[instance_id].plane is None
+    document.undo()
+    assert document.instances[instance_id].slot == instance_id.removesuffix("__instance")

@@ -13,6 +13,7 @@ from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 
 INSTANCE_ROLE = Qt.ItemDataRole.UserRole + 1
+WARNING_ROLE = Qt.ItemDataRole.UserRole + 2
 
 # Cross-widget drag source format (Tree -> VariantSet workbench drop
 # targets, directive #9.2). A plain '\n'-joined list of instance ids --
@@ -41,7 +42,11 @@ class AssemblyTreeModel(QStandardItemModel):
         mime.setData(INSTANCE_MIME_TYPE, "\n".join(instance_ids).encode("utf-8"))
         return mime
 
-    def load_document(self, document) -> None:
+    def load_document(self, document, diagnostics=None) -> None:
+        warning_counts: dict[str, int] = {}
+        for diagnostic in diagnostics or []:
+            if diagnostic.target_id and diagnostic.severity in {"WARN", "ERROR"}:
+                warning_counts[diagnostic.target_id] = warning_counts.get(diagnostic.target_id, 0) + 1
         self.blockSignals(True)
         try:
             self.removeRows(0, self.rowCount())
@@ -53,8 +58,11 @@ class AssemblyTreeModel(QStandardItemModel):
                 source = asset.source_binding.source_id if asset and asset.source_binding else "derived"
                 visibility = "V" if instance.visible else "H"
                 semantic = asset.semantic if asset else instance.asset_ref
-                item = QStandardItem(f"{visibility}  {instance_id}  [{instance.slot}]  {source}")
+                warning_count = warning_counts.get(instance_id, 0) + warning_counts.get(instance.asset_ref, 0)
+                warning_badge = f"  [WARN:{warning_count}]" if warning_count else ""
+                item = QStandardItem(f"{visibility}  {instance_id}  [{instance.slot}]  {source}{warning_badge}")
                 item.setData(instance_id, INSTANCE_ROLE)
+                item.setData(warning_count, WARNING_ROLE)
                 item.setToolTip(f"{semantic} · source {source} · draw order {instance.draw_order}")
                 item.setEditable(False)
                 item.setCheckable(True)

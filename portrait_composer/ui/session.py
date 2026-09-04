@@ -16,6 +16,8 @@ class UISessionState:
     tree_filter: str = ""
     tree_expansion: set[str] = field(default_factory=set)
     preview_mode: str = "Composite"
+    bake_analyzed: bool = False
+    last_render_ms: float = 0.0
     transient_candidate: object | None = None
     open_docks: set[str] = field(default_factory=lambda: {"tree", "inspector", "workbench"})
 

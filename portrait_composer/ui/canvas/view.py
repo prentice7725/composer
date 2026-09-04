@@ -26,6 +26,8 @@ class CanvasView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Portrait composition canvas")
+        self.setToolTip("Canvas: drag to transform a selected layer; hold Space to pan")
         self.setStyleSheet("QGraphicsView { border: 0; }")
         self._space_panning = False
 
@@ -154,6 +156,20 @@ class CanvasView(QGraphicsView):
             self.fitInView(self.scene_model.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self.session.canvas_zoom = 1.0
             self.session.canvas_pan = (0.0, 0.0)
+
+    def restore_view_state(self, zoom: float, pan: tuple[float, float]) -> None:
+        """Restore ephemeral view state after a document has been loaded."""
+        self.fit_canvas()
+        zoom = max(0.05, min(32.0, float(zoom)))
+        if zoom != 1.0:
+            self.scale(zoom, zoom)
+        self.session.canvas_zoom = zoom
+        self.horizontalScrollBar().setValue(round(float(pan[0])))
+        self.verticalScrollBar().setValue(round(float(pan[1])))
+        self.session.canvas_pan = (
+            float(self.horizontalScrollBar().value()),
+            float(self.verticalScrollBar().value()),
+        )
 
     def fit_selection(self) -> None:
         rects = [item.sceneBoundingRect() for item in self.scene_model._hit_items.values() if item.isSelected()]

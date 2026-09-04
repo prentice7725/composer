@@ -1,9 +1,10 @@
 """C5-A QMainWindow shell."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -28,6 +29,8 @@ from ..document import AssemblyDocument
 from ..render import render_reference
 from .canvas.view import CanvasView
 from .commands import harvest_semantic, nudge_draw_order
+from .diagnostics import Diagnostic, collect_diagnostics
+from .docks.diagnostics_dock import DiagnosticsDock
 from .docks.inspector_dock import InspectorDock
 from .docks.tree_dock import TreeDock
 from .portrait_import import PortraitInputWorkspace
@@ -41,11 +44,18 @@ from .workbenches.variants import VariantWorkbench
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, parent=None):
+    SETTINGS_ORGANIZATION = "prentice7725"
+    SETTINGS_APPLICATION = "PortraitComposer"
+    MAX_RECENT_FILES = 10
+
+    def __init__(self, parent=None, *, settings=None):
         super().__init__(parent)
         self.setWindowTitle("Portrait Composer")
         self.resize(1440, 900)
         self.session = UISessionState()
+        self.settings = settings or QSettings(self.SETTINGS_ORGANIZATION, self.SETTINGS_APPLICATION)
+        self.recent_files: list[str] = self._read_recent_files()
+        self._pending_view_state: tuple[float, tuple[float, float]] | None = None
         self.selection_model = SelectionModel()
         self.selection_model.subscribe(lambda _ids: sync_session_selection(self.session, self.selection_model))
         self.selection_model.subscribe(lambda _ids: self._on_selection_changed())
@@ -57,10 +67,12 @@ class MainWindow(QMainWindow):
         self._portrait_workspace = PortraitInputWorkspace()
         self.import_warnings: list[str] = []
         self.harvest_source_pool = {}
+        self.diagnostics: list[Diagnostic] = []
 
         self.canvas = CanvasView(self.selection_model, self.session, self)
         self.setCentralWidget(self.canvas)
         self.tree_dock = TreeDock(self.selection_model, self)
+        self.tree_dock.search.textChanged.connect(self._set_tree_filter)
         self.inspector_dock = InspectorDock(self.selection_model, self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tree_dock)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
@@ -80,15 +92,22 @@ class MainWindow(QMainWindow):
         self.workbench.addWidget(self.donor_workbench)
         self.workbench.addWidget(self.rig_intent_workbench)
         self.workbench.addWidget(self.bake_workbench)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._workbench_dock())
+        self.workbench_dock = self._workbench_dock()
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.workbench_dock)
+        self.diagnostics_dock = DiagnosticsDock(self, self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.diagnostics_dock)
+        self.tabifyDockWidget(self.workbench_dock, self.diagnostics_dock)
+        self.workbench_dock.raise_()
         self._build_context_bar()
         self._build_menus()
+        self._restore_workspace_settings()
         self._update_status()
 
     def _workbench_dock(self):
         from PySide6.QtWidgets import QDockWidget
 
         dock = QDockWidget("Context Workbench", self)
+        dock.setObjectName("contextWorkbenchDock")
         dock.setWidget(self.workbench)
         return dock
 
@@ -98,6 +117,7 @@ class MainWindow(QMainWindow):
 
     def _build_context_bar(self) -> None:
         toolbar = QToolBar("Contexts", self)
+        toolbar.setObjectName("contextToolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.context_buttons = {}
@@ -105,12 +125,16 @@ class MainWindow(QMainWindow):
             button = QToolButton()
             button.setText(context)
             button.setCheckable(True)
+            button.setToolTip(f"Switch to {context} context")
             button.setAccessibleName(f"{context} context")
             button.clicked.connect(lambda checked, c=context: self.set_context(c))
             toolbar.addWidget(button)
             self.context_buttons[context] = button
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
         self.set_context("ASSEMBLE")
+
+    def _set_tree_filter(self, value: str) -> None:
+        self.session.tree_filter = value
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -138,6 +162,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
+        self.recent_menu = file_menu.addMenu("Recent Files")
+        self.recent_menu.setAccessibleName("Recent files")
+        self._update_recent_menu()
 
         edit_menu = self.menuBar().addMenu("Edit")
         undo_action = QAction("Undo", self)
@@ -184,6 +211,97 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, c=context: self.set_context(c))
             view_menu.addAction(action)
 
+    def _read_recent_files(self) -> list[str]:
+        value = self.settings.value("recent_files", [])
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            return []
+        return list(dict.fromkeys(str(path) for path in value if str(path)))[: self.MAX_RECENT_FILES]
+
+    def _update_recent_menu(self) -> None:
+        if not hasattr(self, "recent_menu"):
+            return
+        self.recent_menu.clear()
+        if not self.recent_files:
+            empty = self.recent_menu.addAction("No recent files")
+            empty.setEnabled(False)
+            return
+        for path in self.recent_files:
+            action = self.recent_menu.addAction(path)
+            action.setToolTip(f"Open {path}")
+            action.triggered.connect(lambda checked=False, value=path: self._open_recent(value))
+        self.recent_menu.addSeparator()
+        clear = self.recent_menu.addAction("Clear Recent Files")
+        clear.triggered.connect(self._clear_recent_files)
+
+    def _remember_recent(self, path: Path) -> None:
+        value = str(Path(path).resolve())
+        self.recent_files = [value, *(item for item in self.recent_files if item != value)]
+        self.recent_files = self.recent_files[: self.MAX_RECENT_FILES]
+        self.settings.setValue("recent_files", self.recent_files)
+        self._update_recent_menu()
+
+    def _clear_recent_files(self) -> None:
+        self.recent_files = []
+        self.settings.remove("recent_files")
+        self._update_recent_menu()
+
+    def _open_recent(self, value: str) -> None:
+        path = Path(value)
+        try:
+            self.open_path(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Recent file failed", str(exc))
+
+    def open_path(self, path: Path) -> None:
+        """Open an Assembly Bundle or import a Portrait Bundle input path."""
+        path = Path(path)
+        if path.suffix.lower() == ".zip":
+            self._import_portrait_bundle(path)
+            return
+        manifest_path = path / "manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("format") == "portrait-bundle":
+            self._import_portrait_bundle(path)
+        else:
+            self.load_bundle(path)
+
+    def _restore_workspace_settings(self) -> None:
+        geometry = self.settings.value("geometry")
+        if geometry is not None and not self.restoreGeometry(geometry):
+            self.resize(1440, 900)
+        state = self.settings.value("window_state")
+        if state is not None:
+            self.restoreState(state)
+        context = self.settings.value("last_context", "ASSEMBLE")
+        if context in CONTEXTS:
+            self.set_context(str(context))
+        tree_filter = self.settings.value("tree_filter", "")
+        self.tree_dock.search.setText(str(tree_filter or ""))
+        try:
+            zoom = float(self.settings.value("canvas_zoom", 1.0))
+            pan = (
+                float(self.settings.value("canvas_pan_x", 0.0)),
+                float(self.settings.value("canvas_pan_y", 0.0)),
+            )
+            self._pending_view_state = (zoom, pan)
+        except (TypeError, ValueError):
+            self._pending_view_state = None
+
+    def _save_workspace_settings(self) -> None:
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("window_state", self.saveState())
+        self.settings.setValue("last_context", self.session.active_context)
+        self.settings.setValue("canvas_zoom", self.session.canvas_zoom)
+        self.settings.setValue("canvas_pan_x", self.session.canvas_pan[0])
+        self.settings.setValue("canvas_pan_y", self.session.canvas_pan[1])
+        self.settings.setValue("tree_filter", self.tree_dock.search.text())
+        self.settings.setValue("recent_files", self.recent_files)
+        self.settings.sync()
+
     def set_context(self, context: str) -> None:
         previous = self.session.active_context
         self.session.active_context = context
@@ -219,6 +337,8 @@ class MainWindow(QMainWindow):
             self.canvas.scene_model.region_edit.clear()
         if previous == "BAKE" and context != "BAKE":
             self.canvas.scene_model.clear_transient_preview()
+        if hasattr(self, "diagnostics_dock"):
+            self._refresh_diagnostics()
 
     def _on_selection_changed(self) -> None:
         if self.workbench.currentWidget() is self.donor_workbench:
@@ -252,6 +372,7 @@ class MainWindow(QMainWindow):
         # Core renderer is the preview source of truth. Loading is read-only.
         render_reference(document, layers_dir)
         self._display_document(document, image_sources, layers_dir, source_map=False, bundle_path=bundle_path)
+        self._remember_recent(bundle_path)
 
     def _display_document(
         self,
@@ -272,9 +393,16 @@ class MainWindow(QMainWindow):
         # the canvas must see that same dict, not a snapshot from load time.
         self._canvas_image_sources = self.image_sources if source_map else None
         self.import_warnings = list(import_warnings or [])
+        self.session.bake_analyzed = False
         self.selection_model.clear()
-        self.tree_dock.load_document(document)
+        self._refresh_diagnostics()
+        self.tree_dock.load_document(document, self.diagnostics)
         self.canvas.load_document(document, self._canvas_layers_dir, self._canvas_image_sources)
+        self.session.last_render_ms = self.canvas.scene_model.last_render_ms
+        if self._pending_view_state is not None:
+            zoom, pan = self._pending_view_state
+            self.canvas.restore_view_state(zoom, pan)
+            self._pending_view_state = None
         self.inspector_dock.refresh([])
         self._update_status()
 
@@ -306,6 +434,43 @@ class MainWindow(QMainWindow):
             "ASSEMBLE Workbench\n"
             f"Imported {prepared.label}; the Assembly is ready to edit and save."
         )
+        self._remember_recent(source_path)
+
+    def _refresh_diagnostics(self) -> None:
+        self.diagnostics = collect_diagnostics(self.document, self.import_warnings)
+        if hasattr(self, "diagnostics_dock"):
+            self.diagnostics_dock.refresh(self.document, self.diagnostics, self.session)
+
+    def diagnostics_for_target(self, target_id: str) -> list[Diagnostic]:
+        return [item for item in self.diagnostics if item.target_id == target_id]
+
+    def focus_diagnostic(self, diagnostic: Diagnostic) -> None:
+        """Navigate to a diagnostic target without changing document state."""
+        if diagnostic.context in self.context_buttons and diagnostic.context != self.session.active_context:
+            self.set_context(diagnostic.context)
+        target_id = diagnostic.target_id
+        if target_id is None or self.document is None:
+            self.statusBar().showMessage(f"{diagnostic.severity}: {diagnostic.message}", 6000)
+            return
+        if target_id in self.document.instances:
+            instance_ids = [target_id]
+            asset_id = self.document.instances[target_id].asset_ref
+        elif target_id in self.document.assets:
+            asset_id = target_id
+            instance_ids = [
+                instance_id
+                for instance_id, instance in self.document.instances.items()
+                if instance.asset_ref == target_id
+            ]
+        else:
+            instance_ids = []
+            asset_id = None
+        if not instance_ids:
+            self.statusBar().showMessage(f"{diagnostic.severity}: {diagnostic.message}", 6000)
+            return
+        self.selection_model.set_instances(instance_ids, asset_id=asset_id)
+        self.tree_dock.reveal_instances(instance_ids)
+        self.canvas.fit_selection()
 
     def _confirm_portrait_import(self, bundle, warnings: list[str]) -> bool:
         generation = bundle.generation
@@ -359,6 +524,8 @@ class MainWindow(QMainWindow):
         self.harvest_source_pool = pool
         self.session.harvest_run_labels = list(pool)
         self.set_context("HARVEST")
+        for source_path in source_paths:
+            self._remember_recent(source_path)
         self.statusBar().showMessage(f"Portrait source pool ready: {len(pool)} runs")
 
     def apply_harvest_pick(self, target_tag: str, run_label: str) -> None:
@@ -398,6 +565,7 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:
+        self._save_workspace_settings()
         self._portrait_workspace.cleanup()
         super().closeEvent(event)
 
@@ -432,6 +600,7 @@ class MainWindow(QMainWindow):
             write_assembly_bundle(self.document, self.image_sources, target)
             self.bundle_path = target
             self.document.mark_saved()
+            self._remember_recent(target)
             self._update_status()
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
@@ -483,8 +652,10 @@ class MainWindow(QMainWindow):
         # created document that hasn't been saved yet.
         if self.document is None:
             return
-        self.tree_dock.load_document(self.document)
+        self._refresh_diagnostics()
+        self.tree_dock.load_document(self.document, self.diagnostics)
         self.canvas.load_document(self.document, self._canvas_layers_dir, self._canvas_image_sources)
+        self.session.last_render_ms = self.canvas.scene_model.last_render_ms
         self.inspector_dock.refresh(self.selection_model.instance_ids)
         # Keep whichever workbench is currently visible in sync too -- not
         # just the command that triggered this refresh, so a plain
@@ -509,7 +680,9 @@ class MainWindow(QMainWindow):
             return
         result = self.document.validate()
         state = "valid" if result.ok else f"{len(result.errors)} errors"
+        warning_count = len(result.warnings) + len(self.import_warnings)
         self.statusBar().showMessage(
-            f"{state.upper()}  |  {len(result.warnings)} warnings  |  "
+            f"{state.upper()}  |  {warning_count} warnings  |  "
+            f"render: {self.session.last_render_ms:.1f} ms  |  "
             f"selected: {', '.join(self.selection_model.instance_ids) or 'none'}"
         )

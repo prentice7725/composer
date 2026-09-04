@@ -1,4 +1,4 @@
-"""PySide6 application entry for the optional C5-A GUI."""
+"""PySide6 application entry for the optional C5-A through C5-I GUI."""
 from __future__ import annotations
 
 import sys
@@ -16,7 +16,7 @@ def run_gui(argv: list[str] | None = None) -> int:
     window = MainWindow()
     if argv:
         candidate = Path(argv[0])
-        if candidate.exists() and candidate.is_dir():
-            window.load_bundle(candidate)
+        if candidate.exists():
+            window.open_path(candidate)
     window.show()
     return app.exec()

@@ -12,6 +12,7 @@ from __future__ import annotations
 from .. import links as _links
 from .. import rig_intent as _rig_intent
 from .. import secondary_regions as _secondary_regions
+from .. import slots as _slots
 from .. import variants as _variants
 from ..assembly import apply_recipe, harvest_instance, set_draw_order
 from ..donors import DonorImportResult, import_donor
@@ -60,6 +61,18 @@ def set_instance_visible(document, image_sources, instance_id: str, visible: boo
 def set_instance_opacity(document, image_sources, instance_id: str, opacity: float) -> None:
     recipe = {"operations": [{"op": "set_opacity", "instance": instance_id, "value": float(opacity)}]}
     apply_recipe(document, recipe, image_sources)
+
+
+def set_instance_slot(document, image_sources, instance_id: str, slot: str) -> None:
+    """Commit an Inspector slot edit through the public C1 slot API."""
+    with document.transaction():
+        _slots.set_slot(document, instance_id, str(slot))
+
+
+def set_instance_plane(document, image_sources, instance_id: str, plane: str | None) -> None:
+    """Commit an Inspector plane edit through the public C1 plane API."""
+    with document.transaction():
+        _slots.set_plane(document, instance_id, plane)
 
 
 def harvest_semantic(document, image_sources, bundle_pool: dict, target_tag: str, run_label: str) -> None:
