@@ -55,6 +55,15 @@ def _normalise_geometry(geometry: dict | None) -> dict:
             raise SecondaryRegionError(f"two_lobe {side} geometry must contain finite numbers")
         if any(v <= 0 for v in lobe["radius"]):
             raise SecondaryRegionError(f"two_lobe {side}.radius must be positive")
+    # The two lobes represent one paired upper-torso volume. Keep their
+    # footprint identical, including when an older bundle stored a small
+    # left/right mismatch.
+    common_radius = [
+        (result["left"]["radius"][axis] + result["right"]["radius"][axis]) / 2.0
+        for axis in (0, 1)
+    ]
+    result["left"] = {**result["left"], "radius": list(common_radius)}
+    result["right"] = {**result["right"], "radius": list(common_radius)}
     return result
 
 

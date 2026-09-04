@@ -298,7 +298,12 @@ def write_assembly_bundle(
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
 
     for inst_id, src_path in image_sources.items():
-        shutil.copyfile(src_path, layers_dir / f"{inst_id}.png")
+        destination = layers_dir / f"{inst_id}.png"
+        # Save is intentionally an in-place overwrite.  Imported Assembly
+        # Bundles point image_sources at their own layers/, so blindly
+        # copying would make shutil.copyfile reject source == destination.
+        if Path(src_path).resolve() != destination.resolve():
+            shutil.copyfile(src_path, destination)
 
     if reference_image is None:
         reference_image = render_reference(document, layers_dir)

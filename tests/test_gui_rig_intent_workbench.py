@@ -139,6 +139,40 @@ def test_shift_mirror_updates_the_other_lobe(window):
     region_edit.cancel_drag()
 
 
+def test_lobe_resize_is_shared_without_shift(window):
+    target = next(iter(window.document.instances))
+    window.selection_model.select(target)
+    window.set_context("RIG INTENT")
+    wb = window.rig_intent_workbench
+    from portrait_composer.ui.commands import set_deformation_scope
+
+    window.run_command(lambda doc, srcs: set_deformation_scope(doc, srcs, target, "secondary"))
+    wb._add_region()
+
+    region_edit = window.canvas.scene_model.region_edit
+    region_edit.begin_drag(("left", "corner"), QPointF(0, 0))
+    region_edit.update_drag(QPointF(999, 999), False)
+    assert region_edit.geometry["right"]["radius"] == region_edit.geometry["left"]["radius"]
+    region_edit.cancel_drag()
+
+
+def test_region_starts_near_topwear_bounds(window):
+    target = next(iter(window.document.instances))
+    window.selection_model.select(target)
+    window.set_context("RIG INTENT")
+    wb = window.rig_intent_workbench
+    from portrait_composer.ui.commands import set_deformation_scope
+
+    window.run_command(lambda doc, srcs: set_deformation_scope(doc, srcs, target, "secondary"))
+    wb._add_region()
+
+    geometry = window.document.rig_intent["regions"][UPPER_TORSO_SECONDARY]["geometry"]
+    assert geometry["left"]["center"][0] == pytest.approx(0.38)
+    assert geometry["right"]["center"][0] == pytest.approx(0.62)
+    assert geometry["left"]["center"][1] == pytest.approx(0.42)
+    assert geometry["left"]["radius"] == geometry["right"]["radius"]
+
+
 def test_preflight_status_shown_faithfully_ready_then_degraded(window):
     target = next(iter(window.document.instances))
     window.selection_model.select(target)

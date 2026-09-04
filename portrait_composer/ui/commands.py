@@ -195,11 +195,17 @@ def add_secondary_region(
     target: str,
     response_profile: str = "soft",
     author_strength: float = 0.9,
+    geometry: dict | None = None,
 ) -> dict:
     """Adds the region with the deterministic default two_lobe geometry
     (directive #12); its shape is then edited directly on Canvas."""
     return _secondary_regions.add_region(
-        document, region_id, target=target, response_profile=response_profile, author_strength=author_strength
+        document,
+        region_id,
+        target=target,
+        response_profile=response_profile,
+        author_strength=author_strength,
+        geometry=geometry,
     )
 
 

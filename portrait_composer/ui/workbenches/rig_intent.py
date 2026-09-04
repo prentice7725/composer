@@ -54,6 +54,73 @@ def _label_for(document, instance_id: str) -> str:
     return asset.semantic if asset is not None else instance_id
 
 
+def _starter_two_lobe_geometry(main_window, target_id: str) -> dict | None:
+    """Return a deterministic starter pair positioned near existing topwear.
+
+    This intentionally uses authored instance bounds only.  It is placement
+    convenience for the editor, not an image/body-shape detector; AutoRig
+    remains responsible for pixel-level deformation checks.
+    """
+    document = main_window.document
+    scene = main_window.canvas.scene_model
+    target = document.instances.get(target_id) if document is not None else None
+    if target is None:
+        return None
+
+    def bounds(instance_id: str):
+        instance = document.instances.get(instance_id)
+        if instance is None:
+            return None
+        image_width, image_height = scene.image_size(instance_id)
+        width = image_width * instance.transform.scale_x
+        height = image_height * instance.transform.scale_y
+        if width <= 0 or height <= 0:
+            return None
+        return instance.transform.x, instance.transform.y, width, height
+
+    target_bounds = bounds(target_id)
+    if target_bounds is None:
+        return None
+
+    topwear_id = None
+    for instance_id, instance in document.instances.items():
+        asset = document.assets.get(instance.asset_ref)
+        semantic = asset.semantic.casefold() if asset is not None and isinstance(asset.semantic, str) else ""
+        if semantic in {"topwear", "upper_torso", "topwear_with_arms"} or instance.slot in {
+            "torso_back", "torso", "torso_front"
+        }:
+            topwear_id = instance_id
+            if semantic == "topwear":
+                break
+
+    reference_bounds = bounds(topwear_id) if topwear_id is not None else target_bounds
+    if reference_bounds is None:
+        reference_bounds = target_bounds
+    target_x, target_y, target_width, target_height = target_bounds
+    reference_x, reference_y, reference_width, reference_height = reference_bounds
+
+    def normal_x(value: float) -> float:
+        return max(0.02, min(0.98, (value - target_x) / target_width))
+
+    def normal_y(value: float) -> float:
+        return max(0.02, min(0.98, (value - target_y) / target_height))
+
+    radius_x = max(0.04, min(0.24, reference_width * 0.18 / target_width))
+    radius_y = max(0.04, min(0.20, reference_height * 0.16 / target_height))
+    center_y = normal_y(reference_y + reference_height * 0.42)
+    return {
+        "kind": "two_lobe",
+        "left": {
+            "center": [normal_x(reference_x + reference_width * 0.38), center_y],
+            "radius": [radius_x, radius_y],
+        },
+        "right": {
+            "center": [normal_x(reference_x + reference_width * 0.62), center_y],
+            "radius": [radius_x, radius_y],
+        },
+    }
+
+
 class RigIntentWorkbench(QWidget):
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
@@ -117,6 +184,9 @@ class RigIntentWorkbench(QWidget):
         region_top.addWidget(self.add_region_button)
         region_top.addWidget(self.remove_region_button)
         outer.addLayout(region_top)
+        self.region_hint = QLabel("L/R lobe size is linked; drag centers independently.")
+        self.region_hint.setStyleSheet("color: #7a8296;")
+        outer.addWidget(self.region_hint)
 
         self.preflight_label = QLabel("")
         outer.addWidget(self.preflight_label)
@@ -306,9 +376,14 @@ class RigIntentWorkbench(QWidget):
             return
         from ..commands import add_secondary_region
 
+        geometry = _starter_two_lobe_geometry(self.main_window, instance_id)
         self.main_window.run_command(
             lambda document, image_sources: add_secondary_region(
-                document, image_sources, UPPER_TORSO_SECONDARY, target=instance_id
+                document,
+                image_sources,
+                UPPER_TORSO_SECONDARY,
+                target=instance_id,
+                geometry=geometry,
             )
         )
 

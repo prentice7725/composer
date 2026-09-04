@@ -66,6 +66,15 @@ class RegionEditController:
             "left": {"center": list(geometry["left"]["center"]), "radius": list(geometry["left"]["radius"])},
             "right": {"center": list(geometry["right"]["center"]), "radius": list(geometry["right"]["radius"])},
         }
+        # Keep a legacy/asymmetric saved region visually paired before the
+        # first edit is committed.  Average old values so loading does not
+        # silently privilege either side.
+        common_radius = [
+            (self.geometry["left"]["radius"][axis] + self.geometry["right"]["radius"][axis]) / 2.0
+            for axis in (0, 1)
+        ]
+        self.geometry["left"]["radius"] = list(common_radius)
+        self.geometry["right"]["radius"] = list(common_radius)
         for side in _SIDES:
             lobe_item = QGraphicsEllipseItem()
             lobe_item.setPen(QPen(QColor("#c792ff"), 1.5))
@@ -174,6 +183,12 @@ class RegionEditController:
         elif handle == "corner":
             lobe["radius"][0] = max(MIN_RADIUS, abs(norm_x - lobe["center"][0]))
             lobe["radius"][1] = max(MIN_RADIUS, abs(norm_y - lobe["center"][1]))
+
+        # Radius is a pair-level property. Center movement remains
+        # independent unless the Shift/mirror option is used.
+        if handle != "center":
+            other_side = "right" if side == "left" else "left"
+            self.geometry[other_side]["radius"] = list(lobe["radius"])
 
         if mirror:
             other_side = "right" if side == "left" else "left"

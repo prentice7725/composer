@@ -84,6 +84,9 @@ def test_write_then_read_assembly_bundle_round_trips(portrait_bundle: Path, tmp_
     document, image_sources, _ = identity_assembly(bundle)
     out_dir = tmp_path / "out.assembly"
     write_assembly_bundle(document, image_sources, out_dir)
+    # Save on an already-open Assembly Bundle must be an in-place overwrite;
+    # its image_sources now point at the same layers/ files we are writing.
+    write_assembly_bundle(document, image_sources, out_dir)
 
     assert (out_dir / "reference.png").exists()
     assert (out_dir / "manifest.json").exists()
