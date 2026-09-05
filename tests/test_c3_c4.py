@@ -157,7 +157,14 @@ def test_c3_donor_import_provenance_matte_roi_and_expression(tmp_path: Path):
     # contract, including the explicit expressions field.
     import jsonschema
     schema = json.loads(Path("schemas/portrait-assembly-v0.2.schema.json").read_text())
-    manifest = {"format": "portrait-assembly", "version": "0.2", **document.to_dict()}
+    payload = document.to_dict()
+    # bake_plans/remap_review are Composer v0.3 authoring state and are
+    # persisted in composer-authoring-v03.json, not in strict Assembly v0.2.
+    payload.pop("bake_plans", None)
+    payload.pop("remap_review", None)
+    for instance in payload.get("instances", {}).values():
+        instance.pop("visual_ops", None)
+    manifest = {"format": "portrait-assembly", "version": "0.2", **payload}
     jsonschema.validate(manifest, schema)
 
 

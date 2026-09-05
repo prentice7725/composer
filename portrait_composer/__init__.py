@@ -1,6 +1,7 @@
 """portrait-composer: Semantic Portrait Assembly & Authoring Tool.
 
-Implements C0 + C0.5 + C1 + C2 + C3 + C4 of PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md:
+Implements C0 + C0.5 + C1 + C2 + C3 + C4 and the v0.3 foundation of
+PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.3.md:
 
 - C0.5 = syncing the Portrait Bundle reader with the real, producer-owned
   Portrait Bundle v1 contract from `prentice7725/seethrough-portrait` (bundle.py)
@@ -118,4 +119,4 @@ __all__ = [
     "apply_visual_ops",
 ]
 
-__version__ = "0.2.0-c4"
+__version__ = "0.3.0-dev"

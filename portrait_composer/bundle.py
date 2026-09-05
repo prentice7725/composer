@@ -42,8 +42,9 @@ invent. Summary of what a reader must do, per that spec:
   as import warnings -- never as hard errors, and never synthesized when
   the occlusion diagnostic is simply absent ("not computed" != "no risk").
 
-Assembly Bundle (output, directive #29) is unrelated and unchanged by this
-sync -- it's Composer's own v0.2 output contract:
+Assembly Bundle (output, directive #29) remains Composer's compatible v0.2
+output contract. Composer-only v0.3 authoring state is stored in a sidecar,
+so strict v0.2 consumers can continue to read manifest.json:
 
     A001.assembly/
         manifest.json
@@ -52,6 +53,7 @@ sync -- it's Composer's own v0.2 output contract:
         expressions/
         masks/
         diagnostics/
+        composer-authoring-v03.json  # optional Composer authoring state
 """
 from __future__ import annotations
 
@@ -67,6 +69,9 @@ from .render import render_subset
 
 ASSEMBLY_FORMAT = "portrait-assembly"
 ASSEMBLY_VERSION = "0.2"
+AUTHORING_STATE_FORMAT = "portrait-composer-authoring"
+AUTHORING_STATE_VERSION = "0.3"
+AUTHORING_STATE_FILENAME = "composer-authoring-v03.json"
 
 PORTRAIT_FORMAT = "portrait-bundle"
 PORTRAIT_MAJOR_VERSION = "1"
@@ -348,9 +353,26 @@ def write_assembly_bundle(
                 shutil.copyfile(mask_source, destination)
             op.setdefault("params", {})["path"] = f"masks/{safe_name}"
 
+    # Keep the Assembly manifest strict v0.2.  These Composer-only fields are
+    # authoring state introduced after the Assembly contract was frozen; put
+    # them in a versioned sidecar instead of silently changing the meaning of
+    # a v0.2 manifest for downstream consumers such as AutoRig.
+    authoring_state = {
+        "format": AUTHORING_STATE_FORMAT,
+        "version": AUTHORING_STATE_VERSION,
+        "bake_plans": manifest_document.pop("bake_plans", {}),
+        "remap_review": manifest_document.pop("remap_review", None),
+        "visual_ops": {
+            instance_id: instance.pop("visual_ops", [])
+            for instance_id, instance in manifest_document["instances"].items()
+        },
+    }
     manifest = {"format": ASSEMBLY_FORMAT, "version": ASSEMBLY_VERSION}
     manifest.update(manifest_document)
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    (out_dir / AUTHORING_STATE_FILENAME).write_text(
+        json.dumps(authoring_state, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
     return out_dir
 
@@ -368,6 +390,37 @@ def read_assembly_bundle(path: Path) -> AssemblyDocument:
             f"unsupported assembly version in {manifest_path}: {manifest.get('version')!r}; "
             f"this Composer reads exactly {ASSEMBLY_VERSION!r}"
         )
+    authoring_path = path / AUTHORING_STATE_FILENAME
+    if authoring_path.exists():
+        authoring_state = json.loads(authoring_path.read_text(encoding="utf-8"))
+        if not isinstance(authoring_state, dict):
+            raise BundleError(f"authoring state must be a JSON object: {authoring_path}")
+        if authoring_state.get("format") != AUTHORING_STATE_FORMAT:
+            raise BundleError(
+                f"unexpected authoring state format in {authoring_path}: "
+                f"{authoring_state.get('format')!r}"
+            )
+        if authoring_state.get("version") != AUTHORING_STATE_VERSION:
+            raise BundleError(
+                f"unsupported authoring state version in {authoring_path}: "
+                f"{authoring_state.get('version')!r}; "
+                f"this Composer reads exactly {AUTHORING_STATE_VERSION!r}"
+            )
+        manifest["bake_plans"] = authoring_state.get("bake_plans", {})
+        manifest["remap_review"] = authoring_state.get("remap_review")
+        visual_ops = authoring_state.get("visual_ops", {})
+        if not isinstance(visual_ops, dict):
+            raise BundleError(f"authoring state visual_ops must be an object: {authoring_path}")
+        for instance_id, ops in visual_ops.items():
+            if instance_id not in manifest.get("instances", {}):
+                raise BundleError(
+                    f"authoring state visual_ops references unknown instance {instance_id!r}: {authoring_path}"
+                )
+            if not isinstance(ops, list):
+                raise BundleError(
+                    f"authoring state visual_ops for {instance_id!r} must be an array: {authoring_path}"
+                )
+            manifest["instances"][instance_id]["visual_ops"] = ops
     return AssemblyDocument.from_dict(manifest)
 
 

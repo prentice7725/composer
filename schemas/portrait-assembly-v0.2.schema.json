@@ -40,19 +40,6 @@
     "variant_sets": { "type": "object", "additionalProperties": { "$ref": "#/$defs/variantSet" }, "description": "C1 -- VariantSet map, id -> {mode, default, active, members} (directive #12, variants.py)" },
     "expressions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/expressionPreset" }, "description": "C3 -- thin ExpressionPreset map over VariantSets; no runtime parameter binding" },
     "links": { "type": "object", "description": "C1 -- TransformLink map, id -> {members: [instance_id,...]} (directive #11, links.py)" },
-    "bake_plans": { "type": "object", "additionalProperties": { "$ref": "#/$defs/bakePlan" }, "description": "C6-A/C6-H -- logical bake recipes; no raster is written until APPLY" },
-    "remap_review": {
-      "type": ["object", "null"],
-      "description": "C6-D -- source replacement review state; unresolved entries block AutoRig export",
-      "additionalProperties": false,
-      "properties": {
-        "status": { "type": "string", "enum": ["REVIEW_REQUIRED", "RESOLVED"] },
-        "source_id": { "type": "string" },
-        "entries": { "type": "array" },
-        "unresolved_assets": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-
     "rig_intent": {
       "type": "object",
       "description": "C4 -- RigIntent (directive #21-23)",
@@ -189,16 +176,7 @@
         "mode": { "type": "string", "enum": ["exclusive"] },
         "default": { "type": "string" },
         "active": { "type": "string" },
-        "members": { "type": "array", "items": { "type": "string" } },
-        "state_groups": {
-          "type": "object",
-          "description": "Optional Composer authoring groups for multi-layer states such as an eye stack.",
-          "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
-        },
-        "state_labels": {
-          "type": "object",
-          "additionalProperties": { "type": "string" }
-        }
+        "members": { "type": "array", "items": { "type": "string" } }
       }
     },
     "expressionPreset": {
@@ -232,32 +210,7 @@
         "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
         "transform": { "$ref": "#/$defs/transform" },
         "transform_link": { "type": ["string", "null"] },
-        "plane": { "type": ["string", "null"], "description": "C1 -- which of asset_ref's declared planes this instance renders (directive #14)" },
-        "visual_ops": { "type": "array", "items": { "$ref": "#/$defs/visualOp" } }
-      }
-    },
-    "visualOp": {
-      "type": "object",
-      "required": ["id", "type", "params"],
-      "additionalProperties": false,
-      "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "type": { "type": "string", "enum": ["color", "mask", "quad_warp"] },
-        "enabled": { "type": "boolean" },
-        "params": { "type": "object" }
-      }
-    },
-    "bakePlan": {
-      "type": "object",
-      "required": ["plan_id", "sources", "result_semantic", "result_slot", "status"],
-      "properties": {
-        "plan_id": { "type": "string", "minLength": 1 },
-        "sources": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
-        "result_semantic": { "type": "string", "minLength": 1 },
-        "result_slot": { "type": "string", "minLength": 1 },
-        "status": { "type": "string", "enum": ["PLANNED", "RIG_CHECKED", "CAN_BAKE", "WARN", "BLOCK", "BAKED"] },
-        "analysis": { "type": "object" },
-        "derived_instance_id": { "type": "string" }
+        "plane": { "type": ["string", "null"], "description": "C1 -- which of asset_ref's declared planes this instance renders (directive #14)" }
       }
     }
   }

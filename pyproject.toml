@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "portrait-composer"
-version = "0.2.0.dev0"
-description = "Semantic Portrait Assembly & Authoring Tool (C5 GUI)"
+version = "0.3.0.dev0"
+description = "Semantic Portrait Assembly & Authoring Tool (C6 GUI)"
 requires-python = ">=3.10"
 dependencies = [
     "Pillow>=10",

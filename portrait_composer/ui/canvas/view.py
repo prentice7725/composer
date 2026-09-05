@@ -8,6 +8,9 @@ switches to pan, matching the directive's Space=Pan contract.
 """
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QGraphicsView
@@ -30,6 +33,7 @@ class CanvasView(QGraphicsView):
         self.setToolTip("Canvas: drag to transform a selected layer; hold Space to pan")
         self.setStyleSheet("QGraphicsView { border: 0; }")
         self._space_panning = False
+        self._mask_brush: dict | None = None
 
     def load_document(self, document, layers_dir, image_sources=None) -> None:
         self.scene_model.load_document(document, layers_dir, image_sources)
@@ -43,12 +47,83 @@ class CanvasView(QGraphicsView):
         )
 
     # -- selection + gizmo/donor-ghost gestures --------------------------
+    def enable_mask_brush(self, instance_id: str, op_id: str, *, radius: float, mode: str) -> None:
+        self._mask_brush = {
+            "instance_id": instance_id,
+            "op_id": op_id,
+            "radius": float(radius),
+            "mode": mode,
+            "points": [],
+        }
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(f"Mask brush: {mode} · drag on selected layer; Esc cancels", 5000)
+
+    def cancel_mask_brush(self) -> None:
+        if self._mask_brush is not None:
+            self._mask_brush = None
+            window = self.window()
+            if hasattr(window, "statusBar"):
+                window.statusBar().showMessage("Mask brush cancelled", 2500)
+
+    def _mask_image_point(self, scene_pos):
+        brush = self._mask_brush
+        if brush is None:
+            return None
+        item = self.scene_model._hit_items.get(brush["instance_id"])
+        if item is None:
+            return None
+        local = item.mapFromScene(scene_pos)
+        rect = item.rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return None
+        image_w, image_h = self.scene_model.image_size(brush["instance_id"])
+        return (
+            (local.x() - rect.left()) / rect.width() * image_w,
+            (local.y() - rect.top()) / rect.height() * image_h,
+        )
+
+    def _commit_mask_brush(self) -> None:
+        brush = self._mask_brush
+        self._mask_brush = None
+        if brush is None or not brush["points"]:
+            return
+        window = self.window()
+        run_command = getattr(window, "run_command", None)
+        if run_command is None:
+            return
+        from ..commands import paint_instance_mask
+
+        layers_dir = self.scene_model.layers_dir
+        base_dir = layers_dir.parent if layers_dir is not None else None
+        work_dir = Path(tempfile.mkdtemp(prefix="portrait-composer-mask-"))
+        run_command(
+            lambda document, image_sources: paint_instance_mask(
+                document,
+                image_sources,
+                brush["instance_id"],
+                op_id=brush["op_id"],
+                points=brush["points"],
+                radius=brush["radius"],
+                mode=brush["mode"],
+                work_dir=work_dir,
+                base_dir=base_dir,
+            )
+        )
+
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton or self.scene_model.document is None:
             super().mousePressEvent(event)
             return
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
+        if self._mask_brush is not None:
+            point = self._mask_image_point(scene_pos)
+            if point is not None:
+                self._mask_brush["points"] = [point]
+                event.accept()
+                return
         if event.modifiers() & Qt.KeyboardModifier.AltModifier:
             candidates = []
             for candidate in self.scene().items(scene_pos):
@@ -100,6 +175,12 @@ class CanvasView(QGraphicsView):
 
     def mouseMoveEvent(self, event):
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if self._mask_brush is not None and self._mask_brush["points"]:
+            point = self._mask_image_point(self.mapToScene(event.position().toPoint()))
+            if point is not None:
+                self._mask_brush["points"].append(point)
+            event.accept()
+            return
         if self.scene_model.donor_ghost.drag is not None:
             self.scene_model.donor_ghost.update_drag(self.mapToScene(event.position().toPoint()), shift)
             event.accept()
@@ -115,6 +196,10 @@ class CanvasView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._mask_brush is not None and self._mask_brush["points"]:
+            self._commit_mask_brush()
+            event.accept()
+            return
         if self.scene_model.donor_ghost.drag is not None:
             self.scene_model.donor_ghost.end_drag()
             event.accept()
@@ -207,6 +292,10 @@ class CanvasView(QGraphicsView):
                 return
         if event.key() == Qt.Key.Key_Escape and self.scene_model.donor_ghost.drag is not None:
             self.scene_model.donor_ghost.cancel_drag()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self._mask_brush is not None:
+            self.cancel_mask_brush()
             event.accept()
             return
         if event.key() == Qt.Key.Key_Escape and self.scene_model.region_edit.drag is not None:

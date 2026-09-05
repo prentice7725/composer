@@ -1,7 +1,9 @@
 # Implementation Status
 
 Tracks directive exit checklists (`PORTRAIT_COMPOSER_IMPLEMENTATION_DIRECTIVE_v0.2.md`
-#32-34). **C0 + C0.5 + C1 + C2 + C3 + C4** are implemented.
+#32-34) and the v0.3 closeout. **C0 + C0.5 + C1 + C2 + C3 + C4** are
+implemented; C6 v0.3 foundation is implemented with external consumer QA
+still pending.
 
 The C4 → C2 integration is intentional: a clean PORTRAIT_RIG torso bake
 remains WARN until its logical surface has authored RigIntent; authoring
@@ -358,7 +360,29 @@ C0-C5 contracts. The current slice closes the data/render/export foundation:
 - [x] v0.2 documents migrate in memory with `visual_ops=[]` and
   `bake_plans={}`; no destructive rewrite on load
 
-Remaining v0.3 phases are not claimed closed yet: production-scale performance
-profiling and validation against the actual external AutoRig consumer. The
-Composer-side acceptance fixture and self-contained Rig Bundle validator are
-in place. Current regression result: 260 passed, 2 skipped.
+## v0.3 review closeout (2026-09-05)
+
+- [x] Assembly v0.2 compatibility is strict again: Composer-only
+  `bake_plans`, `remap_review`, and `visual_ops` authoring state is stored in
+  the versioned `composer-authoring-v03.json` sidecar. Older v0.2 bundles
+  without that sidecar remain readable.
+- [x] Assembly v0.2 and authoring v0.3 have separate schemas;
+  `schemas/portrait-assembly-v0.2.schema.json` remains free of v0.3-only
+  fields and is structurally aligned with the AutoRig vendored schema.
+- [x] Inspector Color VisualOp authoring and Canvas mask brush UI are wired
+  to transactional command paths.
+- [x] Inspector Quad Warp update uses the command-layer VisualOp API and has
+  GUI regression coverage.
+- [x] Fixed UI labels now participate in runtime English/Korean
+  retranslation, with an expanded Korean `.ts` catalog and fallback catalog.
+- [x] Package metadata is promoted to `0.3.0.dev0` / `0.3.0-dev`, and the
+  v0.3 directive is checked into `docs/`.
+
+Still externally blocked by design: the sibling `autorigging` repository in
+this workspace has an Assembly v0.2 reader but no `portrait-rig-bundle` v0.3
+consumer. Composer can export and self-validate that bundle, but a real
+cross-repository consumer test requires the AutoRig implementation to be
+updated separately. Production-scale profiling also remains a release QA
+task rather than a unit-test claim.
+
+Current Composer regression result: **265 passed, 2 skipped**.

@@ -40,6 +40,9 @@ from ..commands import (
     set_instance_visible,
     add_instance_mask,
     add_instance_quad_warp,
+    add_instance_color,
+    update_instance_visual_op,
+    paint_instance_mask,
     align_instance_to_target,
     fit_instance_to_target,
     reset_instance_masks,
@@ -222,6 +225,9 @@ class InspectorDock(QDockWidget):
         quad_button = QPushButton("Add Quad Warp")
         quad_button.setAccessibleName("Add quad warp visual operation")
         quad_button.clicked.connect(lambda: self._add_quad_warp(instance))
+        color_button = QPushButton("Add Color")
+        color_button.setAccessibleName("Add color visual operation")
+        color_button.clicked.connect(self._add_color)
         invert_button = QPushButton("Invert Selected Mask")
         invert_button.setAccessibleName("Invert selected mask")
         invert_button.clicked.connect(lambda: self._mask_action(op_list, "invert"))
@@ -229,8 +235,38 @@ class InspectorDock(QDockWidget):
         reset_button.setAccessibleName("Reset visual operations")
         reset_button.clicked.connect(self._reset_masks)
         self.form.addRow(add_button, quad_button)
+        self.form.addRow(QLabel("Color"), color_button)
         self.form.addRow(QLabel("Mask actions"), invert_button)
         self.form.addRow(QLabel(""), reset_button)
+
+        mask_ops = [op for op in ops if op.get("type") == "mask"]
+        if mask_ops:
+            brush_box = QWidget()
+            brush_layout = QGridLayout(brush_box)
+            mask_selector = QComboBox()
+            for mask_op in mask_ops:
+                mask_selector.addItem(str(mask_op.get("id")), str(mask_op.get("id")))
+            mask_selector.setAccessibleName("Mask brush operation")
+            brush_layout.addWidget(QLabel("Operation"), 0, 0)
+            brush_layout.addWidget(mask_selector, 0, 1)
+            mode_selector = QComboBox()
+            mode_selector.addItem("Erase", "erase")
+            mode_selector.addItem("Restore", "restore")
+            mode_selector.setAccessibleName("Mask brush mode")
+            brush_layout.addWidget(QLabel("Mode"), 1, 0)
+            brush_layout.addWidget(mode_selector, 1, 1)
+            radius = self._spin(1.0, 200.0, 1.0, 20.0)
+            radius.setAccessibleName("Mask brush radius")
+            brush_layout.addWidget(QLabel("Radius"), 2, 0)
+            brush_layout.addWidget(radius, 2, 1)
+            brush_button = QPushButton("Paint on Canvas")
+            brush_button.setAccessibleName("Enable mask brush")
+            brush_button.clicked.connect(
+                lambda checked=False, selector=mask_selector, mode=mode_selector, spin=radius:
+                self._enable_mask_brush(selector.currentData(), mode.currentData(), spin.value())
+            )
+            self.form.addRow(QLabel("Mask Brush"), brush_box)
+            self.form.addRow(QLabel(""), brush_button)
 
         selected_op = ops[0] if ops else None
         feather = self._spin(0.0, 200.0, 0.5, float(selected_op.get("params", {}).get("feather", 0.0)) if selected_op and selected_op.get("type") == "mask" else 0.0)
@@ -238,6 +274,24 @@ class InspectorDock(QDockWidget):
         feather.setEnabled(bool(selected_op and selected_op.get("type") == "mask"))
         feather.editingFinished.connect(lambda spin=feather, box=op_list: self._set_feather(box, spin.value()))
         self.form.addRow(QLabel("Feather"), feather)
+
+        color_op = next((op for op in ops if op.get("type") == "color"), None)
+        self._color_spins = []
+        if color_op is not None:
+            color_params = color_op.get("params", {})
+            color_grid = QWidget()
+            color_layout = QGridLayout(color_grid)
+            for index, name in enumerate(("saturation", "brightness", "contrast")):
+                spin = self._spin(0.0, 4.0, 0.05, float(color_params.get(name, 1.0)))
+                spin.setAccessibleName(f"Color {name}")
+                color_layout.addWidget(QLabel(name.title()), index, 0)
+                color_layout.addWidget(spin, index, 1)
+                self._color_spins.append(spin)
+            update_color = QPushButton("Update Color")
+            update_color.setAccessibleName("Update color visual operation")
+            update_color.clicked.connect(lambda box=op_list: self._update_color(box))
+            self.form.addRow(QLabel("Color VisualOp"), color_grid)
+            self.form.addRow(QLabel(""), update_color)
 
         fit_box = QWidget()
         fit_layout = QHBoxLayout(fit_box)
@@ -299,6 +353,12 @@ class InspectorDock(QDockWidget):
             index += 1
         window.run_command(lambda document, image_sources: add_instance_mask(document, image_sources, instance_id, op_id=op_id, path=path))
 
+    def _enable_mask_brush(self, op_id: str, mode: str, radius: float) -> None:
+        window = self._main_window()
+        if window is None or self._instance_id is None:
+            return
+        window.canvas.enable_mask_brush(self._instance_id, op_id, radius=radius, mode=mode)
+
     def _add_quad_warp(self, instance) -> None:
         window = self._main_window()
         instance_id = self._instance_id
@@ -313,6 +373,25 @@ class InspectorDock(QDockWidget):
             op_id = f"quad_warp_{index}"
             index += 1
         window.run_command(lambda document, image_sources: add_instance_quad_warp(document, image_sources, instance_id, op_id=op_id, quad=quad))
+
+    def _add_color(self) -> None:
+        window = self._main_window()
+        instance_id = self._instance_id
+        if window is None or instance_id is None:
+            return
+        document = getattr(window, "document", None)
+        existing = {op.get("id") for op in document.instances[instance_id].visual_ops}
+        op_id = "color"
+        index = 2
+        while op_id in existing:
+            op_id = f"color_{index}"
+            index += 1
+        window.run_command(
+            lambda document, image_sources: add_instance_color(
+                document, image_sources, instance_id, op_id=op_id,
+                saturation=1.0, brightness=1.0, contrast=1.0,
+            )
+        )
 
     def _fit_instance(self, mode: str) -> None:
         window = self._main_window()
@@ -340,7 +419,29 @@ class InspectorDock(QDockWidget):
             return
         op_id = op.get("id")
         quad = [spin.value() for spin in self._quad_spins]
-        window.run_command(lambda document, _image_sources: update_visual_op(document, instance_id, op_id, params={"quad": quad}))
+        window.run_command(
+            lambda document, image_sources: update_instance_visual_op(
+                document, image_sources, instance_id, op_id=op_id, params={"quad": quad}
+            )
+        )
+
+    def _update_color(self, op_list) -> None:
+        window = self._main_window()
+        instance_id = self._instance_id
+        if window is None or instance_id is None or not getattr(self, "_color_spins", None):
+            return
+        op = next((item for item in self._visual_ops.values() if item.get("type") == "color"), None)
+        if op is None:
+            return
+        params = {
+            name: spin.value()
+            for name, spin in zip(("saturation", "brightness", "contrast"), self._color_spins)
+        }
+        window.run_command(
+            lambda document, image_sources: update_instance_visual_op(
+                document, image_sources, instance_id, op_id=op.get("id"), params=params
+            )
+        )
 
     def _selected_mask_id(self, op_list) -> str | None:
         item = op_list.currentItem()

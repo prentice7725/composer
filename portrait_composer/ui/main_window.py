@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QSettings, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -299,8 +300,18 @@ class MainWindow(QMainWindow):
                     continue
                 if action.property("i18n_source") is None:
                     action.setProperty("i18n_source", action.text())
+        # Workbench and dock controls are created outside the menu builder.
+        # Capture their English source once so a later locale switch can
+        # retranslate the already-visible authoring surface as well.
+        for widget in self.findChildren(QLabel):
+            if widget.text() and widget.property("i18n_source") is None:
+                widget.setProperty("i18n_source", widget.text())
+        for widget in self.findChildren(QAbstractButton):
+            if widget.text() and widget.property("i18n_source") is None:
+                widget.setProperty("i18n_source", widget.text())
 
     def _retranslate_ui(self) -> None:
+        self._capture_i18n_sources()
         for button in self.context_buttons.values():
             source = button.property("i18n_source") or button.text()
             button.setText(self.tr(str(source)))
@@ -314,6 +325,19 @@ class MainWindow(QMainWindow):
                     action.setText(self.tr(str(source)))
         for locale, action in self._language_actions.items():
             action.setChecked(locale == self.locale)
+        for widget in self.findChildren(QLabel):
+            source = widget.property("i18n_source")
+            if source:
+                widget.setText(self.tr(str(source)))
+        for widget in self.findChildren(QAbstractButton):
+            source = widget.property("i18n_source")
+            if source:
+                widget.setText(self.tr(str(source)))
+        self.workbench_dock.setWindowTitle(self.tr("Context Workbench"))
+        self.tree_dock.setWindowTitle(self.tr("Assembly Tree"))
+        self.inspector_dock.setWindowTitle(self.tr("Inspector"))
+        self.diagnostics_dock.setWindowTitle(self.tr("Diagnostics / Assembly Status"))
+        self.setWindowTitle(self.tr("Portrait Composer"))
 
     def set_locale(self, locale: str) -> None:
         locale = locale if locale in LOCALES else "en"
@@ -340,6 +364,7 @@ class MainWindow(QMainWindow):
         self.recent_menu.clear()
         if not self.recent_files:
             empty = self.recent_menu.addAction("No recent files")
+            empty.setProperty("i18n_source", "No recent files")
             empty.setEnabled(False)
             return
         for path in self.recent_files:
@@ -348,6 +373,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, value=path: self._open_recent(value))
         self.recent_menu.addSeparator()
         clear = self.recent_menu.addAction("Clear Recent Files")
+        clear.setProperty("i18n_source", "Clear Recent Files")
         clear.triggered.connect(self._clear_recent_files)
 
     def _remember_recent(self, path: Path) -> None:

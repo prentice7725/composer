@@ -82,6 +82,14 @@ def add_instance_quad_warp(document, image_sources, instance_id: str, *, op_id: 
     add_visual_op(document, instance_id, {"id": op_id, "type": "quad_warp", "params": {"quad": list(quad)}})
 
 
+def add_instance_color(document, image_sources, instance_id: str, *, op_id: str, **params) -> None:
+    add_visual_op(document, instance_id, {"id": op_id, "type": "color", "params": dict(params)})
+
+
+def update_instance_visual_op(document, image_sources, instance_id: str, *, op_id: str, params: dict) -> None:
+    update_visual_op(document, instance_id, op_id, params=dict(params))
+
+
 def update_instance_mask(document, image_sources, instance_id: str, *, op_id: str, **params) -> None:
     update_visual_op(document, instance_id, op_id, params=params)
 

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portrait-composer/schemas/portrait-composer-authoring-v0.3.schema.json",
+  "title": "Portrait Composer authoring sidecar v0.3",
+  "description": "Composer-only state kept beside a strict portrait-assembly v0.2 manifest.",
+  "type": "object",
+  "required": ["format", "version", "bake_plans", "remap_review", "visual_ops"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "portrait-composer-authoring" },
+    "version": { "const": "0.3" },
+    "bake_plans": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/bakePlan" }
+    },
+    "remap_review": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["REVIEW_REQUIRED", "RESOLVED"] },
+        "source_id": { "type": "string" },
+        "entries": { "type": "array" },
+        "unresolved_assets": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "visual_ops": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/visualOp" }
+      }
+    }
+  },
+  "$defs": {
+    "visualOp": {
+      "type": "object",
+      "required": ["id", "type", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "enum": ["color", "mask", "quad_warp"] },
+        "enabled": { "type": "boolean" },
+        "params": { "type": "object" }
+      }
+    },
+    "bakePlan": {
+      "type": "object",
+      "required": ["plan_id", "sources", "result_semantic", "result_slot", "status"],
+      "properties": {
+        "plan_id": { "type": "string", "minLength": 1 },
+        "sources": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "result_semantic": { "type": "string", "minLength": 1 },
+        "result_slot": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["PLANNED", "RIG_CHECKED", "CAN_BAKE", "WARN", "BLOCK", "BAKED"] },
+        "analysis": { "type": "object" },
+        "derived_instance_id": { "type": "string" }
+      }
+    }
+  }
+}

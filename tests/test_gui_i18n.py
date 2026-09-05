@@ -27,6 +27,8 @@ def test_runtime_language_switch_uses_qtranslator_and_persists_setting(qapp, tmp
     top_menus = {menu.title() for menu in window.menuBar().findChildren(QMenu)}
     assert "파일" in top_menus
     assert window.context_buttons["ASSEMBLE"].text() == "조립"
+    assert window.workbench_dock.windowTitle() == "컨텍스트 작업대"
+    assert window.workbench_placeholder.text().startswith("ASSEMBLE 작업대")
     assert settings.value("locale") == "ko"
 
     window.set_locale("en")
@@ -34,4 +36,3 @@ def test_runtime_language_switch_uses_qtranslator_and_persists_setting(qapp, tmp
     assert "File" in top_menus
     assert window.context_buttons["ASSEMBLE"].text() == "ASSEMBLE"
     window.close()
-
