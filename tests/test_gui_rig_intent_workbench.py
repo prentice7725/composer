@@ -13,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QRadioButton
+from PIL import Image
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle
@@ -171,6 +172,64 @@ def test_region_starts_near_topwear_bounds(window):
     assert geometry["right"]["center"][0] == pytest.approx(0.62)
     assert geometry["left"]["center"][1] == pytest.approx(0.42)
     assert geometry["left"]["radius"] == geometry["right"]["radius"]
+
+
+def test_region_after_bake_uses_visible_composite_alpha_bounds(window, tmp_path: Path):
+    from portrait_composer.bake import apply_bake_plan
+    from portrait_composer.profiles import PORTRAIT_RIG, analyze_profile
+    from portrait_composer.slots import set_slot
+
+    ids = list(window.document.instances)
+    torso_back, topwear, head = ids[:3]
+    with window.document.transaction():
+        window.document.assets[window.document.instances[torso_back].asset_ref].semantic = "body"
+        set_slot(window.document, torso_back, "torso_back")
+        set_slot(window.document, topwear, "torso")
+        set_slot(window.document, head, "head")
+        window.document.rig_intent["deformation_scopes"][torso_back] = "rigid"
+        window.document.rig_intent["deformation_scopes"][topwear] = "rigid"
+
+    candidate = analyze_profile(window.document, PORTRAIT_RIG)[0]
+    # Use a small visible garment in the middle of a larger canvas.  The
+    # hidden source still has its original full-canvas image after baking.
+    garment_path = tmp_path / "garment.png"
+    garment = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    garment.paste((220, 80, 100, 255), (12, 18, 28, 34))
+    garment.save(garment_path)
+    body_path = tmp_path / "body.png"
+    Image.new("RGBA", (40, 40), (0, 0, 0, 0)).save(body_path)
+    window.image_sources[torso_back] = body_path
+    window.image_sources[topwear] = garment_path
+
+    apply_bake_plan(
+        window.document,
+        window.image_sources,
+        candidate.instance_ids,
+        derived_id="topwear_with_arms",
+        semantic="topwear_with_arms",
+        work_dir=tmp_path / "bake",
+        profile=PORTRAIT_RIG,
+    )
+    window.canvas.load_document(window.document, window._canvas_layers_dir, window._canvas_image_sources)
+
+    target = "topwear_with_arms__instance"
+    assert target in window._canvas_image_sources
+    with Image.open(window._canvas_image_sources[target]) as baked_image:
+        assert baked_image.getchannel("A").getbbox() == (12, 18, 28, 34)
+    window.selection_model.select(target)
+    window.set_context("RIG INTENT")
+    wb = window.rig_intent_workbench
+    wb._add_region()
+
+    geometry = window.document.rig_intent["regions"][UPPER_TORSO_SECONDARY]["geometry"]
+    # The derived image's alpha bbox is x=12..28, y=18..34 in a 40x40
+    # target, so the starter centers must be inside that visual garment area.
+    # The old hidden-source/1x1 fallback produced approximately (.38, .42)
+    # and (.62, .42), which intentionally fails these bounds.
+    for side in ("left", "right"):
+        cx, cy = geometry[side]["center"]
+        assert 0.40 <= cx <= 0.60
+        assert 0.55 <= cy <= 0.70
 
 
 def test_preflight_status_shown_faithfully_ready_then_degraded(window):

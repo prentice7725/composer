@@ -126,7 +126,22 @@ class CanvasScene(QGraphicsScene):
         return width, height
 
     def image_size(self, instance_id: str) -> tuple[float, float]:
-        return self._image_sizes.get(instance_id, (1.0, 1.0))
+        cached = self._image_sizes.get(instance_id)
+        if cached is not None:
+            return cached
+        # Hidden instances are intentionally omitted from hit-item creation,
+        # but their real image dimensions are still needed by authoring
+        # tools (for example, a baked target placed near a hidden source).
+        image_path = self._resolve_image_path(instance_id)
+        if image_path is not None and image_path.exists():
+            try:
+                with Image.open(image_path) as image:
+                    size = image.size
+                self._image_sizes[instance_id] = size
+                return size
+            except (OSError, ValueError):
+                pass
+        return (1.0, 1.0)
 
     def _refresh_selection(self, selected_ids: list[str]) -> None:
         for instance_id, item in self._hit_items.items():

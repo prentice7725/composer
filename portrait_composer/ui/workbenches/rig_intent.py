@@ -14,6 +14,7 @@ response_profile (qualitative) and author_strength (0..1).
 """
 from __future__ import annotations
 
+from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -57,9 +58,11 @@ def _label_for(document, instance_id: str) -> str:
 def _starter_two_lobe_geometry(main_window, target_id: str) -> dict | None:
     """Return a deterministic starter pair positioned near existing topwear.
 
-    This intentionally uses authored instance bounds only.  It is placement
-    convenience for the editor, not an image/body-shape detector; AutoRig
-    remains responsible for pixel-level deformation checks.
+    The reference is chosen from visible topwear and uses its alpha bounds,
+    so a baked/hidden source cannot collapse the calculation to CanvasScene's
+    unknown-size fallback.  This is placement convenience for the editor,
+    not an image/body-shape detector; AutoRig remains responsible for
+    pixel-level deformation checks.
     """
     document = main_window.document
     scene = main_window.canvas.scene_model
@@ -67,33 +70,70 @@ def _starter_two_lobe_geometry(main_window, target_id: str) -> dict | None:
     if target is None:
         return None
 
-    def bounds(instance_id: str):
+    def bounds(instance_id: str, *, visual_only: bool = False):
         instance = document.instances.get(instance_id)
         if instance is None:
             return None
-        image_width, image_height = scene.image_size(instance_id)
-        width = image_width * instance.transform.scale_x
-        height = image_height * instance.transform.scale_y
+        image_path = scene._resolve_image_path(instance_id)
+        alpha_box = None
+        if image_path is not None and image_path.exists():
+            try:
+                with Image.open(image_path) as image:
+                    image_width, image_height = image.size
+                    alpha_box = image.convert("RGBA").getchannel("A").getbbox()
+            except (OSError, ValueError):
+                image_width, image_height = scene.image_size(instance_id)
+        else:
+            image_width, image_height = scene.image_size(instance_id)
+        if visual_only:
+            if alpha_box is None:
+                return None
+        else:
+            # The normalized region coordinate frame is always the complete
+            # target image; only the reference garment uses alpha bounds.
+            alpha_box = (0, 0, image_width, image_height)
+        left, top, right, bottom = alpha_box
+        width = (right - left) * instance.transform.scale_x
+        height = (bottom - top) * instance.transform.scale_y
         if width <= 0 or height <= 0:
             return None
-        return instance.transform.x, instance.transform.y, width, height
+        return (
+            instance.transform.x + left * instance.transform.scale_x,
+            instance.transform.y + top * instance.transform.scale_y,
+            width,
+            height,
+        )
 
     target_bounds = bounds(target_id)
     if target_bounds is None:
         return None
 
     topwear_id = None
+    topwear_candidates = []
     for instance_id, instance in document.instances.items():
+        if not instance.visible or instance.opacity <= 0:
+            continue
         asset = document.assets.get(instance.asset_ref)
         semantic = asset.semantic.casefold() if asset is not None and isinstance(asset.semantic, str) else ""
         if semantic in {"topwear", "upper_torso", "topwear_with_arms"} or instance.slot in {
             "torso_back", "torso", "torso_front"
         }:
-            topwear_id = instance_id
-            if semantic == "topwear":
-                break
+            topwear_candidates.append((instance_id, semantic))
 
-    reference_bounds = bounds(topwear_id) if topwear_id is not None else target_bounds
+    target_asset = document.assets.get(target.asset_ref)
+    target_semantic = target_asset.semantic.casefold() if target_asset is not None and isinstance(target_asset.semantic, str) else ""
+    if target.visible and target.opacity > 0 and target_semantic in {
+        "topwear", "upper_torso", "topwear_with_arms"
+    }:
+        topwear_id = target_id
+    else:
+        priority = {"topwear_with_arms": 0, "topwear": 1, "upper_torso": 2}
+        topwear_candidates.sort(key=lambda item: (priority.get(item[1], 3), item[0]))
+        topwear_id = topwear_candidates[0][0] if topwear_candidates else None
+
+    reference_bounds = bounds(topwear_id, visual_only=True) if topwear_id is not None else None
+    if reference_bounds is None:
+        reference_bounds = bounds(target_id, visual_only=True)
     if reference_bounds is None:
         reference_bounds = target_bounds
     target_x, target_y, target_width, target_height = target_bounds
