@@ -377,6 +377,10 @@ C0-C5 contracts. The current slice closes the data/render/export foundation:
   retranslation, with an expanded Korean `.ts` catalog and fallback catalog.
 - [x] Package metadata is promoted to `0.3.0.dev0` / `0.3.0-dev`, and the
   v0.3 directive is checked into `docs/`.
+- [x] Semantic Merge Bake addendum implemented: `flatten` vs
+  `semantic_merge`, deterministic contact-zone repair, under-layer expansion,
+  internal-line cleanup, named profiles, seam-policy persistence, and GUI
+  controls (`seam_repair.py`, `bake.py`).
 
 Still externally blocked by design: the sibling `autorigging` repository in
 this workspace has an Assembly v0.2 reader but no `portrait-rig-bundle` v0.3
@@ -385,4 +389,4 @@ cross-repository consumer test requires the AutoRig implementation to be
 updated separately. Production-scale profiling also remains a release QA
 task rather than a unit-test claim.
 
-Current Composer regression result: **265 passed, 2 skipped**.
+Current Composer regression result: **268 passed, 2 skipped**.

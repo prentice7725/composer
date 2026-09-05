@@ -72,6 +72,19 @@ def test_bake_output_layer_name_is_user_editable_and_used_for_derived_layer(wind
     assert "torso_with_handwear_v2" in window.document.assets
 
 
+def test_bake_card_exposes_semantic_merge_seam_policy(window):
+    window.set_context("BAKE")
+    card = window.bake_workbench._cards[0]
+    card.bake_mode.setCurrentIndex(card.bake_mode.findData("semantic_merge"))
+    card.seam_cleanup.setCurrentIndex(card.seam_cleanup.findData("aggressive"))
+    card.expand_under.setValue(2)
+
+    policy = card._seam_policy()
+    assert policy["cleanup"] == "aggressive"
+    assert policy["expand_under"] == 2
+    assert policy["remove_internal_lines"] is True
+
+
 def test_block_candidate_apply_button_stays_disabled(window):
     # PORTRAIT_STATIC excludes nothing here, so force a BLOCK by putting an
     # instance into a VariantSet -- baking a variant member is a hard BLOCK.
@@ -241,6 +254,8 @@ def test_bake_plan_ui_creates_and_analyzes_without_raster_output(window):
 
     assert "ui_plan" in window.document.bake_plans
     assert window.document.bake_plans["ui_plan"]["status"] == "PLANNED"
+    assert window.document.bake_plans["ui_plan"]["mode"] == "semantic_merge"
+    assert window.document.bake_plans["ui_plan"]["seam_policy"]["expand_under"] == 1
     assert not any(asset_id == "torso_with_arms" for asset_id in window.document.assets)
 
     wb._analyze_plan()

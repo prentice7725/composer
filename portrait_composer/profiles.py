@@ -147,6 +147,8 @@ def apply_candidate(
     profile: Optional[str] = None,
     ordered_instance_ids: Optional[list] = None,
     transform_overrides: Optional[dict] = None,
+    mode: str | None = None,
+    seam_policy: dict | None = None,
 ) -> tuple:
     """Thin wrapper over bake.apply_bake_plan for one analyzed candidate.
     ``profile`` is stored verbatim in the derived asset's provenance --
@@ -163,6 +165,8 @@ def apply_candidate(
         profile=profile,
         ordered_instance_ids=ordered_instance_ids,
         transform_overrides=transform_overrides,
+        mode=mode,
+        seam_policy=seam_policy,
     )
 
 

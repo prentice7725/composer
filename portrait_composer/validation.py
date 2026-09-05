@@ -30,6 +30,7 @@ from .slots import is_known_slot
 from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, LOGICAL_SURFACES
 from .secondary_regions import GEOMETRY_KINDS, RESPONSE_PROFILES
 from .visual_ops import VisualOpError, validate_stack
+from .seam_repair import normalize_seam_policy, resolve_bake_mode
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -212,6 +213,15 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
             errors.append(f"bake_plan {plan_id!r}: result_semantic must be non-empty")
         if not isinstance(plan.get("result_slot"), str) or not plan.get("result_slot"):
             errors.append(f"bake_plan {plan_id!r}: result_slot must be non-empty")
+        try:
+            resolved_mode = resolve_bake_mode(plan.get("result_semantic", ""), plan.get("mode"))
+            normalize_seam_policy(
+                plan.get("seam_policy"),
+                result_semantic=plan.get("result_semantic", ""),
+                mode=resolved_mode,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"bake_plan {plan_id!r}: invalid seam policy/mode: {exc}")
         if plan.get("status") not in {"PLANNED", "RIG_CHECKED", "CAN_BAKE", "WARN", "BLOCK", "BAKED"}:
             errors.append(f"bake_plan {plan_id!r}: invalid status {plan.get('status')!r}")
         elif isinstance(sources, list):

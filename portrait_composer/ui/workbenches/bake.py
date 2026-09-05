@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QFrame,
     QDoubleSpinBox,
     QFormLayout,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSlider,
+    QSpinBox,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -38,6 +40,7 @@ from ...bake import BLOCK, CAN_BAKE, WARN, analyze_bake
 from ...bake_plan import PLAN_STATUSES
 from ...instances import Transform
 from ...profiles import BakeCandidate, FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile
+from ...seam_repair import BAKE_MODES, BAKE_PROFILES, SEAM_CLEANUP_MODES, normalize_seam_policy, resolve_bake_mode
 from ..commands import analyze_logical_bake_plan, apply_logical_plan, create_logical_bake_plan
 
 PROFILES = (PORTRAIT_STATIC, PORTRAIT_RIG, FULL_MOTION)
@@ -111,6 +114,51 @@ class _CandidateCard(QFrame):
         self.output_name.textChanged.connect(lambda _text: self._update_apply_enabled())
         output_row.addWidget(self.output_name, 1)
         outer.addLayout(output_row)
+
+        seam_row = QHBoxLayout()
+        seam_row.addWidget(QLabel("Bake Mode"))
+        self.bake_mode = QComboBox()
+        for value in BAKE_MODES:
+            self.bake_mode.addItem(value.replace("_", " ").title(), value)
+        self.bake_mode.setCurrentIndex(
+            self.bake_mode.findData(resolve_bake_mode(candidate.label))
+        )
+        self.bake_mode.setAccessibleName(f"Bake mode for {candidate.label}")
+        self.bake_mode.currentIndexChanged.connect(self._seam_mode_changed)
+        seam_row.addWidget(self.bake_mode)
+        seam_row.addWidget(QLabel("Seam Cleanup"))
+        self.seam_cleanup = QComboBox()
+        for value in SEAM_CLEANUP_MODES:
+            self.seam_cleanup.addItem(value.title(), value)
+        self.seam_cleanup.setAccessibleName(f"Seam cleanup for {candidate.label}")
+        seam_row.addWidget(self.seam_cleanup)
+        seam_row.addWidget(QLabel("Expand Under"))
+        self.expand_under = QSpinBox()
+        self.expand_under.setRange(0, 2)
+        self.expand_under.setSuffix(" px")
+        self.expand_under.setValue(1)
+        self.expand_under.setAccessibleName(f"Under-layer expansion for {candidate.label}")
+        seam_row.addWidget(self.expand_under)
+        self.remove_internal_lines = QCheckBox("Remove Internal Lines")
+        self.remove_internal_lines.setChecked(True)
+        self.remove_internal_lines.setAccessibleName(f"Remove internal seam lines for {candidate.label}")
+        seam_row.addWidget(self.remove_internal_lines)
+        seam_row.addStretch(1)
+        outer.addLayout(seam_row)
+
+        self.ownership_rule = QComboBox()
+        self.ownership_rule.addItem("None", None)
+        for profile_name in BAKE_PROFILES:
+            self.ownership_rule.addItem(profile_name, profile_name)
+        default_rule = candidate.label if candidate.label in BAKE_PROFILES else None
+        self.ownership_rule.setCurrentIndex(self.ownership_rule.findData(default_rule))
+        self.ownership_rule.setAccessibleName(f"Ownership rule for {candidate.label}")
+        ownership_row = QHBoxLayout()
+        ownership_row.addWidget(QLabel("Ownership Rule"))
+        ownership_row.addWidget(self.ownership_rule)
+        ownership_row.addStretch(1)
+        outer.addLayout(ownership_row)
+        self._seam_mode_changed()
 
         outer.addWidget(QLabel("Sources"))
         self.sources = QListWidget()
@@ -299,6 +347,27 @@ class _CandidateCard(QFrame):
             "transform_overrides": dict(self._staged_transforms),
         }
 
+    def _seam_policy(self) -> dict:
+        return normalize_seam_policy(
+            {
+                "cleanup": self.seam_cleanup.currentData(),
+                "expand_under": self.expand_under.value(),
+                "remove_internal_lines": self.remove_internal_lines.isChecked(),
+                "ownership_rule": self.ownership_rule.currentData(),
+            },
+            result_semantic=self._output_name() or self.candidate.label,
+            mode=self.bake_mode.currentData(),
+        )
+
+    def _seam_mode_changed(self) -> None:
+        semantic_merge = self.bake_mode.currentData() == "semantic_merge"
+        self.seam_cleanup.setEnabled(semantic_merge)
+        self.expand_under.setEnabled(semantic_merge)
+        self.remove_internal_lines.setEnabled(semantic_merge)
+        self.ownership_rule.setEnabled(semantic_merge)
+        if hasattr(self, "mode_group"):
+            self._update_preview_from_staging()
+
     def _update_preview_from_staging(self) -> None:
         checked = next((button for button in self.mode_group.buttons() if button.isChecked()), None)
         if checked is not None:
@@ -320,6 +389,8 @@ class _CandidateCard(QFrame):
             mode,
             self.wipe_slider.value() / 100.0,
             **self._staging_kwargs(),
+            bake_mode=self.bake_mode.currentData(),
+            seam_policy=self._seam_policy(),
         )
 
     def _acknowledge_toggled(self, checked: bool) -> None:
@@ -353,6 +424,8 @@ class _CandidateCard(QFrame):
                 semantic=derived_id,
                 work_dir=work_dir,
                 profile=profile,
+                mode=self.bake_mode.currentData(),
+                seam_policy=self._seam_policy(),
                 **self._staging_kwargs(),
             )
 
@@ -426,6 +499,35 @@ class BakeWorkbench(QWidget):
         self.apply_plan_button.clicked.connect(self._apply_plan)
         plan_layout.addWidget(self.apply_plan_button)
         outer.addWidget(plan_box)
+
+        plan_options = QHBoxLayout()
+        plan_options.addWidget(QLabel("Mode"))
+        self.plan_mode_combo = QComboBox()
+        for value in BAKE_MODES:
+            self.plan_mode_combo.addItem(value.replace("_", " ").title(), value)
+        self.plan_mode_combo.setCurrentIndex(self.plan_mode_combo.findData("semantic_merge"))
+        self.plan_mode_combo.setAccessibleName("Bake plan mode")
+        plan_options.addWidget(self.plan_mode_combo)
+        plan_options.addWidget(QLabel("Seam Cleanup"))
+        self.plan_cleanup_combo = QComboBox()
+        for value in SEAM_CLEANUP_MODES:
+            self.plan_cleanup_combo.addItem(value.title(), value)
+        self.plan_cleanup_combo.setCurrentIndex(self.plan_cleanup_combo.findData("auto"))
+        self.plan_cleanup_combo.setAccessibleName("Bake plan seam cleanup")
+        plan_options.addWidget(self.plan_cleanup_combo)
+        plan_options.addWidget(QLabel("Expand Under"))
+        self.plan_expand_under = QSpinBox()
+        self.plan_expand_under.setRange(0, 2)
+        self.plan_expand_under.setValue(1)
+        self.plan_expand_under.setSuffix(" px")
+        self.plan_expand_under.setAccessibleName("Bake plan under-layer expansion")
+        plan_options.addWidget(self.plan_expand_under)
+        self.plan_remove_internal_lines = QCheckBox("Remove Internal Lines")
+        self.plan_remove_internal_lines.setChecked(True)
+        self.plan_remove_internal_lines.setAccessibleName("Bake plan remove internal seam lines")
+        plan_options.addWidget(self.plan_remove_internal_lines)
+        plan_options.addStretch(1)
+        outer.addLayout(plan_options)
 
         plan_row = QHBoxLayout()
         plan_row.addWidget(QLabel("Saved plans"))
@@ -501,6 +603,16 @@ class BakeWorkbench(QWidget):
             self.analyze_plan_button.setEnabled(False)
             self.apply_plan_button.setEnabled(False)
             return
+        mode = plan.get("mode")
+        if mode is not None and self.plan_mode_combo.findData(mode) >= 0:
+            self.plan_mode_combo.setCurrentIndex(self.plan_mode_combo.findData(mode))
+        policy = plan.get("seam_policy") or {}
+        if policy.get("cleanup") is not None and self.plan_cleanup_combo.findData(policy["cleanup"]) >= 0:
+            self.plan_cleanup_combo.setCurrentIndex(self.plan_cleanup_combo.findData(policy["cleanup"]))
+        if policy.get("expand_under") is not None:
+            self.plan_expand_under.setValue(int(policy["expand_under"]))
+        if policy.get("remove_internal_lines") is not None:
+            self.plan_remove_internal_lines.setChecked(bool(policy["remove_internal_lines"]))
         self.plan_status_label.setText(f"{plan_id}: {plan.get('status', '—')}")
         self.analyze_plan_button.setEnabled(True)
         self.apply_plan_button.setEnabled(plan.get("status") not in {"BLOCK", "BAKED"})
@@ -517,9 +629,27 @@ class BakeWorkbench(QWidget):
         if not plan_id or not semantic or not slot:
             self.status_label.setText("Plan id, result semantic, and result slot are required.")
             return
+        mode = self.plan_mode_combo.currentData()
+        seam_policy = normalize_seam_policy(
+            {
+                "cleanup": self.plan_cleanup_combo.currentData(),
+                "expand_under": self.plan_expand_under.value(),
+                "remove_internal_lines": self.plan_remove_internal_lines.isChecked(),
+                "ownership_rule": semantic if semantic in BAKE_PROFILES else None,
+            },
+            result_semantic=semantic,
+            mode=mode,
+        )
         if self.main_window.run_command(
             lambda doc, image_sources: create_logical_bake_plan(
-                doc, image_sources, plan_id, sources=sources, result_semantic=semantic, result_slot=slot
+                doc,
+                image_sources,
+                plan_id,
+                sources=sources,
+                result_semantic=semantic,
+                result_slot=slot,
+                mode=mode,
+                seam_policy=seam_policy,
             )
         ):
             matches = self.plan_list.findItems(plan_id, Qt.MatchFlag.MatchExactly)

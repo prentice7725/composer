@@ -51,9 +51,23 @@
         "sources": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "result_semantic": { "type": "string", "minLength": 1 },
         "result_slot": { "type": "string", "minLength": 1 },
+        "mode": { "type": "string", "enum": ["flatten", "semantic_merge"] },
+        "seam_policy": { "$ref": "#/$defs/seamPolicy" },
         "status": { "type": "string", "enum": ["PLANNED", "RIG_CHECKED", "CAN_BAKE", "WARN", "BLOCK", "BAKED"] },
         "analysis": { "type": "object" },
         "derived_instance_id": { "type": "string" }
+      }
+    },
+    "seamPolicy": {
+      "type": "object",
+      "required": ["cleanup", "expand_under", "remove_internal_lines", "contact_band_px", "ownership_rule"],
+      "additionalProperties": false,
+      "properties": {
+        "cleanup": { "type": "string", "enum": ["off", "auto", "aggressive"] },
+        "expand_under": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "remove_internal_lines": { "type": "boolean" },
+        "contact_band_px": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "ownership_rule": { "type": ["string", "null"] }
       }
     }
   }

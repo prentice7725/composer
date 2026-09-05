@@ -43,8 +43,9 @@ from typing import Optional, TYPE_CHECKING
 
 from .assets import AssetDefinition
 from .instances import LayerInstance, Transform
-from .render import render_subset
+from .render import render_subset, render_subset_layers
 from .rig_intent import is_rig_protected_semantic
+from .seam_repair import normalize_seam_policy, repair_semantic_merge, resolve_bake_mode
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -144,10 +145,25 @@ def _rig_intent_reasons(document: "AssemblyDocument", instance_ids: list) -> lis
     return reasons
 
 
-def analyze_bake(document: "AssemblyDocument", instance_ids: list) -> BakeAnalysis:
+def analyze_bake(
+    document: "AssemblyDocument",
+    instance_ids: list,
+    *,
+    mode: str | None = None,
+    seam_policy: dict | None = None,
+    result_semantic: str = "",
+) -> BakeAnalysis:
     """Dry-run bake analysis (directive #17). Never mutates the document."""
     reasons: list[str] = []
     instance_ids = list(instance_ids)
+    resolved_mode = resolve_bake_mode(result_semantic, mode)
+    normalized_policy = normalize_seam_policy(
+        seam_policy,
+        result_semantic=result_semantic,
+        mode=resolved_mode,
+    )
+    if resolved_mode == "semantic_merge" and normalized_policy["cleanup"] == "off":
+        reasons.append("WARN: semantic_merge seam cleanup is disabled")
 
     if len(instance_ids) < 2:
         reasons.append("BLOCK: bake needs at least 2 source instances")
@@ -221,6 +237,8 @@ def apply_bake_plan(
     profile: Optional[str] = None,
     ordered_instance_ids: Optional[list] = None,
     transform_overrides: Optional[dict] = None,
+    mode: str | None = None,
+    seam_policy: dict | None = None,
 ) -> tuple:
     """Bakes ``instance_ids`` into one derived AssetDefinition + LayerInstance.
 
@@ -234,7 +252,19 @@ def apply_bake_plan(
     new instance id at that file, the same convention
     identity_assembly/harvest_assembly use.
     """
-    analysis = analyze_bake(document, instance_ids)
+    resolved_mode = resolve_bake_mode(semantic, mode)
+    normalized_policy = normalize_seam_policy(
+        seam_policy,
+        result_semantic=semantic,
+        mode=resolved_mode,
+    )
+    analysis = analyze_bake(
+        document,
+        instance_ids,
+        mode=resolved_mode,
+        seam_policy=normalized_policy,
+        result_semantic=semantic,
+    )
     if analysis.verdict == BLOCK:
         raise BakeBlockedError(analysis)
 
@@ -253,6 +283,29 @@ def apply_bake_plan(
         ordered_ids,
         transform_overrides=transform_overrides,
     )
+    seam_report = {
+        "mode": resolved_mode,
+        "cleanup": normalized_policy["cleanup"],
+        "contact_pixels": 0,
+        "expanded_pixels": 0,
+        "internal_lines_removed": False,
+    }
+    if resolved_mode == "semantic_merge":
+        rendered_layers = render_subset_layers(
+            document,
+            image_sources,
+            ordered_ids,
+            transform_overrides=transform_overrides,
+        )
+        semantic_layers = [
+            (
+                instance_id,
+                document.assets[document.instances[instance_id].asset_ref].semantic,
+                image,
+            )
+            for instance_id, image in rendered_layers
+        ]
+        composite, seam_report = repair_semantic_merge(composite, semantic_layers, normalized_policy)
     staging = None
     if ordered_instance_ids is not None or transform_overrides is not None:
         staging = {
@@ -296,8 +349,11 @@ def apply_bake_plan(
             planes=[semantic],
             provenance={
                 "derived_from": sources_detail,
-                "operation": "alpha_composite",
+                "operation": "semantic_merge" if resolved_mode == "semantic_merge" else "alpha_composite",
                 "profile": profile,
+                "bake_mode": resolved_mode,
+                "seam_policy": normalized_policy,
+                "seam_report": seam_report,
                 "timestamp": time.time(),
                 "version": BAKE_VERSION,
                 **({"staging": staging} if staging is not None else {}),
@@ -328,7 +384,13 @@ def apply_bake_plan(
         document.composition["draw_order"] = new_order
 
         for target_id in (derived_inst_id, derived_id):
-            extra = {"detail": sources_detail, "profile": profile}
+            extra = {
+                "detail": sources_detail,
+                "profile": profile,
+                "bake_mode": resolved_mode,
+                "seam_policy": normalized_policy,
+                "seam_report": seam_report,
+            }
             if staging is not None:
                 extra["staging"] = staging
             document.provenance.record(

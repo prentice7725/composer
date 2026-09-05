@@ -9,6 +9,7 @@ import copy
 from pathlib import Path
 
 from . import bake as _bake
+from .seam_repair import normalize_seam_policy, resolve_bake_mode
 
 PLAN_STATUSES = ("PLANNED", "RIG_CHECKED", "CAN_BAKE", "WARN", "BLOCK", "BAKED")
 
@@ -38,6 +39,8 @@ def create_bake_plan(
     sources: list[str],
     result_semantic: str,
     result_slot: str,
+    mode: str | None = None,
+    seam_policy: dict | None = None,
 ) -> dict:
     if not plan_id:
         raise BakePlanError("plan id must be non-empty")
@@ -45,6 +48,15 @@ def create_bake_plan(
         raise BakePlanError("sources must be a non-empty list of unique instance ids")
     if not result_semantic or not result_slot:
         raise BakePlanError("result_semantic and result_slot must be non-empty")
+    try:
+        resolved_mode = resolve_bake_mode(result_semantic, mode)
+        resolved_policy = normalize_seam_policy(
+            seam_policy,
+            result_semantic=result_semantic,
+            mode=resolved_mode,
+        )
+    except ValueError as exc:
+        raise BakePlanError(str(exc)) from exc
 
     def mutate():
         if plan_id in document.bake_plans:
@@ -54,6 +66,8 @@ def create_bake_plan(
             "sources": list(sources),
             "result_semantic": result_semantic,
             "result_slot": result_slot,
+            "mode": resolved_mode,
+            "seam_policy": resolved_policy,
             "status": "PLANNED",
         }
         document.bake_plans[plan_id] = plan
@@ -63,7 +77,7 @@ def create_bake_plan(
 
 
 def update_bake_plan(document, plan_id: str, **changes) -> dict:
-    allowed = {"sources", "result_semantic", "result_slot"}
+    allowed = {"sources", "result_semantic", "result_slot", "mode", "seam_policy"}
     unknown = set(changes) - allowed
     if unknown:
         raise BakePlanError(f"unsupported bake plan fields: {sorted(unknown)!r}")
@@ -78,6 +92,16 @@ def update_bake_plan(document, plan_id: str, **changes) -> dict:
             raise BakePlanError("sources must be unique")
         if not updated.get("result_semantic") or not updated.get("result_slot"):
             raise BakePlanError("result_semantic and result_slot must be non-empty")
+        try:
+            resolved_mode = resolve_bake_mode(updated["result_semantic"], updated.get("mode"))
+            updated["mode"] = resolved_mode
+            updated["seam_policy"] = normalize_seam_policy(
+                updated.get("seam_policy"),
+                result_semantic=updated["result_semantic"],
+                mode=resolved_mode,
+            )
+        except ValueError as exc:
+            raise BakePlanError(str(exc)) from exc
         updated["status"] = "PLANNED"
         updated["plan_id"] = plan_id
         updated.pop("analysis", None)
@@ -99,7 +123,13 @@ def remove_bake_plan(document, plan_id: str) -> None:
 
 def analyze_bake_plan(document, plan_id: str):
     plan = _require_plan(document, plan_id)
-    analysis = _bake.analyze_bake(document, list(plan["sources"]))
+    analysis = _bake.analyze_bake(
+        document,
+        list(plan["sources"]),
+        mode=plan.get("mode"),
+        seam_policy=plan.get("seam_policy"),
+        result_semantic=plan.get("result_semantic", ""),
+    )
 
     def mutate():
         current = _require_plan(document, plan_id)
@@ -112,7 +142,13 @@ def analyze_bake_plan(document, plan_id: str):
 
 def apply_bake_plan(document, image_sources: dict, plan_id: str, *, work_dir: Path, profile: str | None = None):
     plan = _require_plan(document, plan_id)
-    analysis = _bake.analyze_bake(document, list(plan["sources"]))
+    analysis = _bake.analyze_bake(
+        document,
+        list(plan["sources"]),
+        mode=plan.get("mode"),
+        seam_policy=plan.get("seam_policy"),
+        result_semantic=plan.get("result_semantic", ""),
+    )
     if analysis.verdict == _bake.BLOCK:
         raise _bake.BakeBlockedError(analysis)
 
@@ -127,6 +163,8 @@ def apply_bake_plan(document, image_sources: dict, plan_id: str, *, work_dir: Pa
             slot=plan["result_slot"],
             work_dir=work_dir,
             profile=profile,
+            mode=plan.get("mode"),
+            seam_policy=plan.get("seam_policy"),
         )
         current = _require_plan(document, plan_id)
         current["status"] = "BAKED"

@@ -318,6 +318,8 @@ def bake_candidate(
     profile: str | None = None,
     ordered_instance_ids: list | None = None,
     transform_overrides: dict | None = None,
+    mode: str | None = None,
+    seam_policy: dict | None = None,
 ):
     """Commits one Bake Apply (C5-G, directive #13.4).
 
@@ -339,16 +341,30 @@ def bake_candidate(
         profile=profile,
         ordered_instance_ids=ordered_instance_ids,
         transform_overrides=transform_overrides,
+        mode=mode,
+        seam_policy=seam_policy,
     )
 
 
-def create_logical_bake_plan(document, image_sources, plan_id: str, *, sources: list[str], result_semantic: str, result_slot: str) -> dict:
+def create_logical_bake_plan(
+    document,
+    image_sources,
+    plan_id: str,
+    *,
+    sources: list[str],
+    result_semantic: str,
+    result_slot: str,
+    mode: str | None = None,
+    seam_policy: dict | None = None,
+) -> dict:
     return create_bake_plan(
         document,
         plan_id,
         sources=sources,
         result_semantic=result_semantic,
         result_slot=result_slot,
+        mode=mode,
+        seam_policy=seam_policy,
     )
 
 

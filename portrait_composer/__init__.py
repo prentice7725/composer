@@ -52,6 +52,7 @@ from .secondary_regions import (
     visual_preflight,
 )
 from .sources import SourceAsset, SourceBinding, SourceRevision
+from .seam_repair import BAKE_MODES, BAKE_PROFILES, SEAM_CLEANUP_MODES
 from .transform_ops import TransformOpError, align_instance, fit_instance, flip_transform, nudge_transform, reset_transform, set_uniform_scale
 from .visual_ops import VisualOpError, add_visual_op, apply_visual_ops
 
@@ -117,6 +118,9 @@ __all__ = [
     "VisualOpError",
     "add_visual_op",
     "apply_visual_ops",
+    "BAKE_MODES",
+    "SEAM_CLEANUP_MODES",
+    "BAKE_PROFILES",
 ]
 
 __version__ = "0.3.0-dev"

@@ -172,6 +172,12 @@ Harvest는 원본 픽셀을 destructive하게 수정하지 않는다.
 
 Bake는 **선택된 여러 레이어를 실제 하나의 derived raster layer로 굽는 기능**이다.
 
+Bake는 `flatten`과 `semantic_merge` 두 모드를 가진다. 일반 합성은
+`flatten`을 사용하고, `topwear_with_arms`처럼 새 semantic surface를 만드는
+경우 `semantic_merge`를 사용한다. Semantic merge는 contact zone을 검사하고
+seam repair, under-layer expansion, 필요 시 internal line cleanup과
+ownership rule을 적용한다. Source PNG와 mask는 수정하지 않는다.
+
 담당:
 
 - alpha composite
@@ -1385,12 +1391,16 @@ Exit:
 - COMPOSE / RIG PREP 2축 workspace
 - Variant logical target rule
 - existing Donor/RigIntent/Bake workbench 재사용
+- `flatten` / `semantic_merge` bake mode
+- seam policy serialization and deterministic contact-zone repair
+- named semantic merge profile (`topwear_with_arms`)
 
 Exit:
 
 - feature loss 없음
 - mental model 2축
 - Bake planning 시 raster 생성 없음
+- semantic merge의 seam policy save/reload 및 undo/redo 보존
 
 ---
 

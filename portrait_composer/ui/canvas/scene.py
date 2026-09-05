@@ -11,8 +11,9 @@ from PySide6.QtGui import QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene
 
 from ...instances import Transform
-from ...render import _positioned, render_reference, render_subset
+from ...render import _positioned, render_reference, render_subset, render_subset_layers
 from ...preview import PreviewState
+from ...seam_repair import normalize_seam_policy, repair_semantic_merge, resolve_bake_mode
 from .donor_align import DonorAlignController
 from .gizmos import TransformGizmo
 from .region_edit import RegionEditController
@@ -363,6 +364,8 @@ class CanvasScene(QGraphicsScene):
         *,
         ordered_instance_ids: list | None = None,
         transform_overrides: dict | None = None,
+        bake_mode: str | None = None,
+        seam_policy: dict | None = None,
     ) -> None:
         if self.document is None or self._committed_reference is None:
             return
@@ -375,6 +378,8 @@ class CanvasScene(QGraphicsScene):
             instance_ids,
             ordered_instance_ids=ordered_instance_ids,
             transform_overrides=transform_overrides,
+            bake_mode=bake_mode,
+            seam_policy=seam_policy,
         )
         if after is None:
             self._set_preview_pixmap(before)
@@ -402,6 +407,8 @@ class CanvasScene(QGraphicsScene):
         *,
         ordered_instance_ids: list | None = None,
         transform_overrides: dict | None = None,
+        bake_mode: str | None = None,
+        seam_policy: dict | None = None,
     ) -> Image.Image | None:
         """The full canvas as it would render if ``instance_ids`` were
         collapsed into their single derived composite -- built by literally
@@ -433,6 +440,27 @@ class CanvasScene(QGraphicsScene):
                 ordered_candidates,
                 transform_overrides=transform_overrides,
             )
+            resolved_mode = resolve_bake_mode("", bake_mode)
+            if resolved_mode == "semantic_merge":
+                rendered_layers = render_subset_layers(
+                    document,
+                    sources,
+                    ordered_candidates,
+                    transform_overrides=transform_overrides,
+                )
+                semantic_layers = [
+                    (
+                        instance_id,
+                        document.assets[document.instances[instance_id].asset_ref].semantic,
+                        image,
+                    )
+                    for instance_id, image in rendered_layers
+                ]
+                derived, _ = repair_semantic_merge(
+                    derived,
+                    semantic_layers,
+                    normalize_seam_policy(seam_policy, mode="semantic_merge"),
+                )
 
             preview = Image.new("RGBA", (width, height), (0, 0, 0, 0))
             inserted = False

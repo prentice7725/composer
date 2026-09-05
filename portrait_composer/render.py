@@ -163,3 +163,58 @@ def render_subset(
         visual_ops_root=visual_ops_root,
         visual_ops_overrides=visual_ops_overrides,
     )
+
+
+def render_subset_layers(
+    document: "AssemblyDocument",
+    image_sources: dict,
+    instance_ids: list,
+    *,
+    transform_overrides: dict | None = None,
+    visual_ops_overrides: dict | None = None,
+) -> list[tuple[str, Image.Image]]:
+    """Render selected instances as full-canvas RGBA layers.
+
+    This is used only by semantic merge seam repair.  It shares the same
+    source -> VisualOps -> opacity -> transform order as ``render_subset``
+    while retaining per-source alpha for contact-zone analysis.
+    """
+    canvas = document.composition.get("canvas") or {}
+    width, height = canvas.get("width"), canvas.get("height")
+    if width is None or height is None:
+        raise ValueError("render_subset_layers requires a canvas")
+    visual_ops_root = None
+    for source in image_sources.values():
+        if source:
+            source_path = Path(source)
+            visual_ops_root = source_path.parent.parent if source_path.parent.name == "layers" else source_path.parent
+            break
+
+    rendered = []
+    for inst_id in instance_ids:
+        inst = document.instances.get(inst_id)
+        if inst is None or not inst.visible or inst.opacity <= 0.0:
+            continue
+        path = image_sources.get(inst_id)
+        if path is None or not Path(path).exists():
+            raise FileNotFoundError(f"layer image missing for instance {inst_id!r}: {path}")
+        with Image.open(path) as im:
+            im = apply_visual_ops(
+                im.convert("RGBA"),
+                (visual_ops_overrides or {}).get(inst_id, getattr(inst, "visual_ops", [])),
+                base_dir=visual_ops_root,
+            )
+            if inst.opacity < 1.0:
+                r, g, b, a = im.split()
+                a = a.point(lambda value: round(value * inst.opacity))
+                im = Image.merge("RGBA", (r, g, b, a))
+            transform = (transform_overrides or {}).get(inst_id, inst.transform)
+            if isinstance(transform, dict):
+                from .instances import Transform
+
+                transform = Transform.from_dict(transform)
+            im, (x, y) = _positioned(im, transform)
+            full = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            full.alpha_composite(im, dest=(x, y))
+            rendered.append((inst_id, full))
+    return rendered
