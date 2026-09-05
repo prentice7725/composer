@@ -83,6 +83,13 @@ def collect_diagnostics(document, import_warnings: list[str] | None = None) -> l
         seen.add(key)
         text = str(message)
         diagnostics.append(Diagnostic("WARN", text, _target_for_message(document, text), _context_for_message(text)))
+    review = getattr(document, "remap_review", None) or {}
+    if review.get("status") == "REVIEW_REQUIRED":
+        unresolved = review.get("unresolved_assets", [])
+        text = "source remap review required"
+        if unresolved:
+            text += f": {', '.join(map(str, unresolved))}"
+        diagnostics.append(Diagnostic("WARN", text, None, "ASSEMBLE"))
     return diagnostics
 
 

@@ -73,6 +73,7 @@ class LayerInstance:
     transform: Transform = field(default_factory=Transform)
     transform_link: Optional[str] = None
     plane: Optional[str] = None
+    visual_ops: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +86,7 @@ class LayerInstance:
             "transform": self.transform.to_dict(),
             "transform_link": self.transform_link,
             "plane": self.plane,
+            "visual_ops": list(self.visual_ops),
         }
 
     @staticmethod
@@ -99,4 +101,5 @@ class LayerInstance:
             transform=Transform.from_dict(d.get("transform", {})),
             transform_link=d.get("transform_link"),
             plane=d.get("plane"),
+            visual_ops=list(d.get("visual_ops", [])),
         )

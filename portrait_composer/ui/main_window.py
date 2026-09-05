@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QCoreApplication, QSettings, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QStackedWidget,
     QToolBar,
@@ -27,6 +28,8 @@ from ..bundle import (
 )
 from ..document import AssemblyDocument
 from ..render import render_reference
+from ..rig_bundle import export_rig_bundle
+from ..remap import apply_remap_resolution, classify_remap
 from .canvas.view import CanvasView
 from .commands import harvest_semantic, nudge_draw_order
 from .diagnostics import Diagnostic, collect_diagnostics
@@ -35,7 +38,10 @@ from .docks.inspector_dock import InspectorDock
 from .docks.tree_dock import TreeDock
 from .portrait_import import PortraitInputWorkspace
 from .portrait_input_dialog import PortraitInputDialog
+from .remap_dialog import RemapReviewDialog
+from .rig_export_dialog import RigExportReviewDialog
 from .session import CONTEXTS, SelectionModel, UISessionState, sync_session_selection
+from .i18n import LOCALES, install_translator
 from .workbenches.donor import DonorWorkbench
 from .workbenches.harvest import HarvestWorkbench
 from .workbenches.bake import BakeWorkbench
@@ -55,6 +61,8 @@ class MainWindow(QMainWindow):
         self.resize(1440, 900)
         self.session = UISessionState()
         self.settings = settings or QSettings(self.SETTINGS_ORGANIZATION, self.SETTINGS_APPLICATION)
+        self.locale = str(self.settings.value("locale", "en"))
+        self._translator = install_translator(QCoreApplication.instance(), self.locale)
         self.recent_files: list[str] = self._read_recent_files()
         self._pending_view_state: tuple[float, tuple[float, float]] | None = None
         self.selection_model = SelectionModel()
@@ -128,15 +136,46 @@ class MainWindow(QMainWindow):
         self.context_buttons = {}
         for context in CONTEXTS:
             button = QToolButton()
-            button.setText(context)
+            button.setProperty("i18n_source", context)
+            button.setText(self.tr(context))
             button.setCheckable(True)
             button.setToolTip(f"Switch to {context} context")
             button.setAccessibleName(f"{context} context")
             button.clicked.connect(lambda checked, c=context: self.set_context(c))
             toolbar.addWidget(button)
             self.context_buttons[context] = button
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("Workspace"))
+        self.workspace_buttons = {}
+        for axis in ("COMPOSE", "RIG PREP"):
+            button = QToolButton()
+            button.setText(axis)
+            button.setCheckable(True)
+            button.setToolTip(
+                "Composition and source authoring" if axis == "COMPOSE"
+                else "Rig intent and bake preparation"
+            )
+            button.setAccessibleName(f"{axis} workspace")
+            button.clicked.connect(lambda checked, value=axis: self._set_workspace_axis(value))
+            toolbar.addWidget(button)
+            self.workspace_buttons[axis] = button
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
         self.set_context("ASSEMBLE")
+        self._set_workspace_axis("COMPOSE")
+
+    def _set_workspace_axis(self, axis: str) -> None:
+        """Navigate the two broad authoring phases without replacing contexts."""
+        axis = axis if axis in {"COMPOSE", "RIG PREP"} else "COMPOSE"
+        rig_prep_contexts = {"DONOR", "RIG INTENT", "BAKE"}
+        if axis == "RIG PREP" and self.session.active_context not in rig_prep_contexts:
+            self.set_context("DONOR")
+            return
+        if axis == "COMPOSE" and self.session.active_context in rig_prep_contexts:
+            self.set_context("ASSEMBLE")
+            return
+        self.session.workspace_axis = axis
+        for name, button in getattr(self, "workspace_buttons", {}).items():
+            button.setChecked(name == axis)
 
     def _set_tree_filter(self, value: str) -> None:
         self.session.tree_filter = value
@@ -150,6 +189,8 @@ class MainWindow(QMainWindow):
         import_action.triggered.connect(self.import_portrait_bundle_dialog)
         import_runs_action = QAction("Import Portrait Runs…", self)
         import_runs_action.triggered.connect(self.import_portrait_runs_dialog)
+        reimport_action = QAction("Re-import Portrait Bundle…", self)
+        reimport_action.triggered.connect(self.reimport_portrait_bundle_dialog)
         open_action = QAction("Open Assembly Bundle…", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_bundle_dialog)
@@ -159,6 +200,8 @@ class MainWindow(QMainWindow):
         save_as_action = QAction("Save As…", self)
         save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         save_as_action.triggered.connect(self.save_bundle_as)
+        export_rig_action = QAction("Export Rig Bundle…", self)
+        export_rig_action.triggered.connect(self.export_rig_bundle_dialog)
         exit_action = QAction("Exit", self)
         exit_action.setShortcut(QKeySequence("Ctrl+Q"))
         exit_action.triggered.connect(lambda: self.close())
@@ -166,10 +209,12 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(import_action)
         file_menu.addAction(import_runs_action)
+        file_menu.addAction(reimport_action)
         file_menu.addSeparator()
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
+        file_menu.addAction(export_rig_action)
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
         self.recent_menu = file_menu.addMenu("Recent Files")
@@ -228,6 +273,58 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(lambda checked=False, c=context: self.set_context(c))
             view_menu.addAction(action)
+
+        language_menu = view_menu.addMenu("Language")
+        self._language_actions = {}
+        for locale, label in LOCALES.items():
+            action = language_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(locale == self.locale)
+            action.triggered.connect(lambda checked=False, value=locale: self.set_locale(value))
+            self._language_actions[locale] = action
+        self._capture_i18n_sources()
+        self._retranslate_ui()
+
+    def _capture_i18n_sources(self) -> None:
+        """Capture source labels once so runtime retranslation is lossless."""
+        for menu in self.menuBar().findChildren(QMenu):
+            if menu.property("i18n_source") is None:
+                menu.setProperty("i18n_source", menu.title())
+            for action in menu.actions():
+                if action.isSeparator():
+                    continue
+                if action.menu() is not None:
+                    if action.menu().property("i18n_source") is None:
+                        action.menu().setProperty("i18n_source", action.menu().title())
+                    continue
+                if action.property("i18n_source") is None:
+                    action.setProperty("i18n_source", action.text())
+
+    def _retranslate_ui(self) -> None:
+        for button in self.context_buttons.values():
+            source = button.property("i18n_source") or button.text()
+            button.setText(self.tr(str(source)))
+        for menu in self.menuBar().findChildren(QMenu):
+            source = menu.property("i18n_source")
+            if source:
+                menu.setTitle(self.tr(str(source)))
+            for action in menu.actions():
+                source = action.property("i18n_source")
+                if source and action.menu() is None:
+                    action.setText(self.tr(str(source)))
+        for locale, action in self._language_actions.items():
+            action.setChecked(locale == self.locale)
+
+    def set_locale(self, locale: str) -> None:
+        locale = locale if locale in LOCALES else "en"
+        app = QCoreApplication.instance()
+        if self._translator is not None:
+            app.removeTranslator(self._translator)
+            self._translator.deleteLater()
+        self.locale = locale
+        self._translator = install_translator(app, locale)
+        self.settings.setValue("locale", locale)
+        self._retranslate_ui()
 
     def _read_recent_files(self) -> list[str]:
         value = self.settings.value("recent_files", [])
@@ -297,6 +394,11 @@ class MainWindow(QMainWindow):
         context = self.settings.value("last_context", "ASSEMBLE")
         if context in CONTEXTS:
             self.set_context(str(context))
+        axis = str(self.settings.value("workspace_axis", self.session.workspace_axis) or "COMPOSE")
+        if axis in {"COMPOSE", "RIG PREP"}:
+            self.session.workspace_axis = axis
+            for name, button in getattr(self, "workspace_buttons", {}).items():
+                button.setChecked(name == axis)
         tree_filter = self.settings.value("tree_filter", "")
         self.tree_dock.search.setText(str(tree_filter or ""))
         tree_filter_mode = str(self.settings.value("tree_filter_mode", "All") or "All")
@@ -316,6 +418,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("window_state", self.saveState())
         self.settings.setValue("last_context", self.session.active_context)
+        self.settings.setValue("workspace_axis", self.session.workspace_axis)
         self.settings.setValue("canvas_zoom", self.session.canvas_zoom)
         self.settings.setValue("canvas_pan_x", self.session.canvas_pan[0])
         self.settings.setValue("canvas_pan_y", self.session.canvas_pan[1])
@@ -327,6 +430,7 @@ class MainWindow(QMainWindow):
     def set_context(self, context: str) -> None:
         previous = self.session.active_context
         self.session.active_context = context
+        self.session.workspace_axis = "RIG PREP" if context in {"DONOR", "RIG INTENT", "BAKE"} else "COMPOSE"
         if context == "ASSEMBLE":
             self.workbench_dock.hide()
         else:
@@ -339,6 +443,8 @@ class MainWindow(QMainWindow):
             )
         for name, button in self.context_buttons.items():
             button.setChecked(name == context)
+        for name, button in getattr(self, "workspace_buttons", {}).items():
+            button.setChecked(name == self.session.workspace_axis)
         self.canvas.scene_model.set_context(context)
         if previous == "DONOR" and context != "DONOR":
             # An uncommitted donor ghost is local, transient state for this
@@ -467,6 +573,50 @@ class MainWindow(QMainWindow):
             f"Imported {prepared.label}; the Assembly is ready to edit and save."
         )
         self._remember_recent(source_path)
+
+    def reimport_portrait_bundle_dialog(self) -> None:
+        if self.document is None:
+            self.statusBar().showMessage("Open an Assembly before re-importing a Portrait Bundle", 5000)
+            return
+        dialog = PortraitInputDialog(multiple=False, parent=self)
+        dialog.setWindowTitle("Re-import Portrait Bundle")
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        try:
+            prepared = self._portrait_workspace.read(dialog.paths[0])
+            report = classify_remap(self.document, prepared.bundle)
+            review = RemapReviewDialog(report, self)
+            if review.exec() != review.DialogCode.Accepted:
+                return
+            choices = review.manual_choices
+            selected_layers = {}
+            for entry in report.entries:
+                if entry.status in ("EXACT_MATCH", "SEMANTIC_MATCH"):
+                    selected_layers[entry.asset_id] = entry.candidates[0]
+                elif entry.status in ("AMBIGUOUS", "ORPHANED") and entry.asset_id in choices:
+                    selected_layers[entry.asset_id] = choices[entry.asset_id]
+            if not self.run_command(
+                lambda document, _image_sources: apply_remap_resolution(
+                    document, prepared.bundle, report, choices
+                )
+            ):
+                return
+            # SourceBinding is document state; image_sources is the current
+            # canvas cache. Update the latter only after the transaction has
+            # committed, then refresh once so a failed review cannot leave a
+            # half-replaced visual source behind.
+            by_id = {layer.id: layer for layer in prepared.bundle.layers}
+            for asset_id, layer_id in selected_layers.items():
+                layer = by_id.get(layer_id)
+                if layer is None:
+                    continue
+                for instance_id, instance in self.document.instances.items():
+                    if instance.asset_ref == asset_id:
+                        self.image_sources[instance_id] = prepared.bundle.layer_path(layer)
+            self._refresh_after_document_change()
+            self._remember_recent(dialog.paths[0])
+        except Exception as exc:
+            QMessageBox.critical(self, "Portrait re-import failed", str(exc))
 
     def _refresh_diagnostics(self) -> None:
         self.diagnostics = collect_diagnostics(self.document, self.import_warnings)
@@ -624,6 +774,27 @@ class MainWindow(QMainWindow):
         if not chosen:
             return
         self._write_bundle(Path(chosen))
+
+    def export_rig_bundle_dialog(self) -> None:
+        if self.document is None:
+            return
+        chosen = QFileDialog.getExistingDirectory(self, "Export Rig Bundle As")
+        if chosen:
+            review = RigExportReviewDialog(self.document, self.image_sources, self)
+            if review.exec() != review.DialogCode.Accepted:
+                return
+            self._write_rig_bundle(Path(chosen))
+
+    def _write_rig_bundle(self, target: Path) -> bool:
+        if self.document is None:
+            return False
+        try:
+            export_rig_bundle(self.document, self.image_sources, target)
+            self.statusBar().showMessage(f"Rig Bundle exported: {target}", 6000)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Rig Bundle export failed", str(exc))
+            return False
 
     def _write_bundle(self, target: Path) -> None:
         if self.document is None:

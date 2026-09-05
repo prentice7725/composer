@@ -313,3 +313,52 @@ not a replacement for AutoRig/runtime profiling.
 
 GUI tests remain optional for local core-only installs; CI installs the
 `[dev,gui]` extras and runs the full PySide6 suite in offscreen mode.
+
+## C6 v0.3 -- foundation implemented
+
+The v0.3 directive is being implemented incrementally while preserving the
+C0-C5 contracts. The current slice closes the data/render/export foundation:
+
+- [x] `LayerInstance.visual_ops` ordered, serialized stack with color, mask,
+  and quad-warp evaluators (`visual_ops.py`)
+- [x] canonical Pillow reference/subset rendering evaluates the same
+  serialized VisualOps before instance opacity/transform
+- [x] VisualOps transactional add/update/remove/reorder/enable/reset helpers
+  with undo/redo and source-image immutability tests
+- [x] non-destructive transform helpers for uniform scale, flip, reset,
+  nudge, fit, and anchor alignment (`transform_ops.py`)
+- [x] transient proxy preview state separated from the document; canonical
+  renderer accepts transform/VisualOps overrides without creating history
+  (`preview.py`); canvas gizmo gestures now publish begin/update/cancel/commit
+  lifecycle into that transient state
+- [x] Qt-native translator foundation with English/Korean runtime switch,
+  QSettings persistence, and `.ts` sources (`ui/i18n.py`)
+- [x] atomic source re-import/remap resolution with explicit
+  AMBIGUOUS/ORPHANED choices; existing instance Transform/VisualOps are
+  preserved; review status persists in the Assembly, appears in Diagnostics,
+  and blocks AutoRig export while unresolved (`remap.py`, `ui/remap_dialog.py`)
+- [x] Mask VisualOp authoring controls in Inspector: add, invert, feather,
+  reset; copy-on-write erase/restore stroke core with one-stroke/one-undo
+  semantics (`mask_ops.py`)
+- [x] C6-G Fit Width/Height/Box, anchor alignment, and Quad Warp authoring
+  controls in Inspector; serialized quad geometry is evaluated by canonical
+  Pillow rendering (`transform_ops.py`, `visual_ops.py`)
+- [x] serialized logical Bake Plan with PLAN/ANALYZE/APPLY lifecycle and one
+  transaction boundary for final apply (`bake_plan.py`)
+- [x] Bake Workbench plan authoring/list/analyze/apply controls, plus persisted
+  COMPOSE/RIG PREP workspace-axis navigation and restoration
+- [x] Assembly save persists referenced mask PNGs under `masks/`
+- [x] separate AutoRig-facing Rig Bundle export and preflight validation
+  (`rig_bundle.py`), plus GUI File > Export Rig Bundle; export now evaluates
+  canonical VisualOps pixels and includes AutoRig layer/instance metadata plus
+  `donors.json`; VisualOps mask paths are rewritten to self-contained
+  `masks/` references, and GUI export requires an explicit preflight review
+  before writing the bundle; post-export self-contained contract validation is
+  performed before export returns
+- [x] v0.2 documents migrate in memory with `visual_ops=[]` and
+  `bake_plans={}`; no destructive rewrite on load
+
+Remaining v0.3 phases are not claimed closed yet: production-scale performance
+profiling and validation against the actual external AutoRig consumer. The
+Composer-side acceptance fixture and self-contained Rig Bundle validator are
+in place. Current regression result: 260 passed, 2 skipped.

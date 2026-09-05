@@ -131,15 +131,19 @@ def test_gizmo_move_drag_commits_one_transaction_and_esc_is_a_document_noop(qapp
     # be byte-identical (the drag never touched it).
     gizmo.begin_drag(("move", None), QPointF(0.0, 0.0))
     gizmo.update_drag(QPointF(15.0, 9.0), False)
+    assert window.canvas.scene_model.preview_state.active is True
+    assert window.canvas.scene_model.preview_state.transform_overrides[instance_id]["x"] == 15.0
     gizmo.cancel_drag()
     assert document.to_dict() == before
     assert document.history.revision == revision_before
+    assert window.canvas.scene_model.preview_state.active is False
 
     # A real drag-and-release commits exactly once through run_command.
     gizmo.begin_drag(("move", None), QPointF(0.0, 0.0))
     gizmo.update_drag(QPointF(20.0, -6.0), False)
     fields = gizmo.end_drag()
     assert fields == {"x": 20.0, "y": -6.0}
+    assert window.canvas.scene_model.preview_state.active is False
 
     from portrait_composer.ui.commands import set_instance_transform
 

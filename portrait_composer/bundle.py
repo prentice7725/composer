@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import Optional
 
 from .document import AssemblyDocument
-from .render import render_reference
+from .render import render_subset
 
 ASSEMBLY_FORMAT = "portrait-assembly"
 ASSEMBLY_VERSION = "0.2"
@@ -306,11 +306,50 @@ def write_assembly_bundle(
             shutil.copyfile(src_path, destination)
 
     if reference_image is None:
-        reference_image = render_reference(document, layers_dir)
+        # Render from the caller's source map, not the destination directory.
+        # This matters for Save As: relative VisualOps masks may still live
+        # beside the current Assembly until the artifact-copy block below
+        # materializes them under the new bundle's masks/ directory.
+        reference_image = render_subset(
+            document,
+            image_sources,
+            list(document.composition.get("draw_order", [])),
+        )
     reference_image.save(out_dir / "reference.png")
 
+    # VisualOps are document data, but mask pixels are bundle artifacts. Copy
+    # each referenced mask into the Assembly Bundle and rewrite only the
+    # serialized manifest path; the in-memory document keeps its authoring
+    # path and therefore remains undo/redo-safe.
+    manifest_document = document.to_dict()
+    source_roots = []
+    for source in image_sources.values():
+        source_path = Path(source)
+        source_roots.extend(
+            [source_path.parent.parent, source_path.parent]
+            if source_path.parent.name == "layers"
+            else [source_path.parent]
+        )
+    for instance_id, instance in manifest_document["instances"].items():
+        for op in instance.get("visual_ops", []):
+            if op.get("type") != "mask":
+                continue
+            raw_path = op.get("params", {}).get("path")
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            candidates = [Path(raw_path)] if Path(raw_path).is_absolute() else [out_dir / raw_path]
+            candidates.extend(root / raw_path for root in source_roots)
+            mask_source = next((candidate for candidate in candidates if candidate.exists()), None)
+            if mask_source is None:
+                raise FileNotFoundError(f"mask file missing for visual op {op.get('id')!r}: {raw_path}")
+            safe_name = f"{instance_id}__{op.get('id', 'mask')}.png"
+            destination = out_dir / "masks" / safe_name
+            if mask_source.resolve() != destination.resolve():
+                shutil.copyfile(mask_source, destination)
+            op.setdefault("params", {})["path"] = f"masks/{safe_name}"
+
     manifest = {"format": ASSEMBLY_FORMAT, "version": ASSEMBLY_VERSION}
-    manifest.update(document.to_dict())
+    manifest.update(manifest_document)
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
     return out_dir

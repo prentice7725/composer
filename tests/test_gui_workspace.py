@@ -62,6 +62,26 @@ def test_workspace_settings_round_trip(qapp, portrait_bundle: Path, tmp_path: Pa
     second.close()
 
 
+def test_workspace_axis_navigates_and_persists(qapp, tmp_path: Path):
+    settings_path = tmp_path / "axis.ini"
+    first = MainWindow(settings=_settings(settings_path))
+
+    first._set_workspace_axis("RIG PREP")
+    assert first.session.workspace_axis == "RIG PREP"
+    assert first.session.active_context == "DONOR"
+    first._save_workspace_settings()
+    first.close()
+
+    second = MainWindow(settings=_settings(settings_path))
+    assert second.session.workspace_axis == "RIG PREP"
+    assert second.session.active_context == "DONOR"
+
+    second._set_workspace_axis("COMPOSE")
+    assert second.session.workspace_axis == "COMPOSE"
+    assert second.session.active_context == "ASSEMBLE"
+    second.close()
+
+
 def test_recent_files_are_bounded_deduplicated_and_clearable(qapp, tmp_path: Path):
     window = MainWindow(settings=_settings(tmp_path / "recent.ini"))
     paths = [tmp_path / f"assembly-{index}" for index in range(window.MAX_RECENT_FILES + 2)]

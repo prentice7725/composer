@@ -109,6 +109,7 @@ def apply_auto_resolvable_remap(document: AssemblyDocument, new_bundle: Portrait
     revision = content_hash(new_bundle.root / "manifest.json")
     by_id = {l.id: l for l in new_bundle.layers}
 
+    unresolved_assets: list[str] = []
     with document.transaction():
         document.sources[source_id] = SourceAsset(source_id=source_id, path=str(new_bundle.root))
         for entry in report.entries:
@@ -148,3 +149,59 @@ def apply_manual_remap(document: AssemblyDocument, asset_id: str, new_bundle: Po
             fallback_semantic=new_layer.semantic,
         )
         document.provenance.record(asset_id, operation="remap", sources=[source_id], status="MANUAL")
+
+
+def apply_remap_resolution(
+    document: AssemblyDocument,
+    new_bundle: PortraitBundle,
+    report: RemapReport,
+    manual_choices: dict[str, str] | None = None,
+) -> None:
+    """Apply all automatic resolutions and explicit choices atomically.
+
+    Transform, visibility, VisualOps, VariantSets, and instance identity are
+    intentionally untouched: only each AssetDefinition's SourceBinding is
+    replaced.  ``manual_choices`` is required for every unresolved entry the
+    caller wants to resolve, so AMBIGUOUS/ORPHANED cases can never be guessed.
+    """
+    manual_choices = dict(manual_choices or {})
+    by_id = {layer.id: layer for layer in new_bundle.layers}
+    source_id = source_id_for(new_bundle)
+    revision = content_hash(new_bundle.root / "manifest.json")
+    unresolved_assets: list[str] = []
+
+    with document.transaction():
+        document.sources[source_id] = SourceAsset(source_id=source_id, path=str(new_bundle.root))
+        for entry in report.entries:
+            if entry.status in (EXACT_MATCH, SEMANTIC_MATCH):
+                chosen_layer_id = entry.candidates[0]
+                status = entry.status
+            elif entry.status in (AMBIGUOUS, ORPHANED):
+                chosen_layer_id = manual_choices.get(entry.asset_id)
+                if chosen_layer_id is None:
+                    unresolved_assets.append(entry.asset_id)
+                    continue
+                if chosen_layer_id not in entry.candidates and entry.status == AMBIGUOUS:
+                    raise KeyError(
+                        f"manual remap for {entry.asset_id!r} must choose one of {entry.candidates!r}"
+                    )
+                status = "MANUAL"
+            else:
+                continue
+            if chosen_layer_id not in by_id:
+                raise KeyError(f"no such layer in new bundle: {chosen_layer_id!r}")
+            asset = document.assets[entry.asset_id]
+            layer = by_id[chosen_layer_id]
+            asset.source_binding = SourceBinding(
+                source_id=source_id,
+                revision=revision,
+                source_layer_id=layer.id,
+                fallback_semantic=layer.semantic,
+            )
+            document.provenance.record(entry.asset_id, operation="remap", sources=[source_id], status=status)
+        document.remap_review = {
+            "status": "REVIEW_REQUIRED" if unresolved_assets else "RESOLVED",
+            "source_id": source_id,
+            "entries": [entry.to_dict() for entry in report.entries],
+            "unresolved_assets": list(unresolved_assets),
+        }

@@ -227,3 +227,22 @@ def test_bake_selected_analyzes_the_current_multi_selection(window):
     assert len(wb._cards) == 1
     assert wb._cards[0].candidate.label == "selected_layers"
     assert wb._cards[0].candidate.instance_ids == selected
+
+
+def test_bake_plan_ui_creates_and_analyzes_without_raster_output(window):
+    selected = list(window.document.instances)[:2]
+    window.selection_model.set_instances(selected)
+    window.set_context("BAKE")
+    wb = window.bake_workbench
+    wb.plan_id_edit.setText("ui_plan")
+    wb.plan_result_edit.setText("torso_with_arms")
+    wb.plan_slot_edit.setText("torso")
+    wb._create_plan()
+
+    assert "ui_plan" in window.document.bake_plans
+    assert window.document.bake_plans["ui_plan"]["status"] == "PLANNED"
+    assert not any(asset_id == "torso_with_arms" for asset_id in window.document.assets)
+
+    wb._analyze_plan()
+    assert window.document.bake_plans["ui_plan"]["status"] == "WARN"
+    assert "analysis" in window.document.bake_plans["ui_plan"]

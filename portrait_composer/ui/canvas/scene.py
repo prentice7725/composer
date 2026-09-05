@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectI
 
 from ...instances import Transform
 from ...render import _positioned, render_reference, render_subset
+from ...preview import PreviewState
 from .donor_align import DonorAlignController
 from .gizmos import TransformGizmo
 from .region_edit import RegionEditController
@@ -41,6 +42,7 @@ class CanvasScene(QGraphicsScene):
         self._flicker_frames: tuple[Image.Image, Image.Image] | None = None
         self._flicker_phase = False
         self.last_render_ms = 0.0
+        self.preview_state = PreviewState()
         self._donor_flicker_timer: QTimer | None = None
         self._donor_flicker_phase = False
         self.gizmo = TransformGizmo(self)
@@ -61,6 +63,7 @@ class CanvasScene(QGraphicsScene):
         self.clear_donor_ghost()
         self.region_edit.clear()
         self.clear_transient_preview()
+        self.preview_state.clear()
         self.document = document
         self.layers_dir = Path(layers_dir)
         self.image_sources = image_sources

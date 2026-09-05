@@ -62,6 +62,12 @@ class AssemblyDocument:
         # VariantSets; AutoRig parameter binding is intentionally absent.
         self.expressions: dict = {}
         self.composition: dict = {"draw_order": [], "canvas": {}}
+        # C6-A Bake Plan declarations.  v0.2 documents omit this field and
+        # are migrated in memory to an empty plan map without mutation.
+        self.bake_plans: dict = {}
+        # C6-D source replacement review state. ``None`` means that this
+        # Assembly has not gone through a re-import review yet.
+        self.remap_review: dict | None = None
         self.provenance = ProvenanceLog()
         self.history = HistoryManager()
         self._transaction_depth = 0
@@ -129,6 +135,8 @@ class AssemblyDocument:
         self.rig_intent = restored.rig_intent
         self.expressions = restored.expressions
         self.composition = restored.composition
+        self.bake_plans = restored.bake_plans
+        self.remap_review = restored.remap_review
         self.provenance = restored.provenance
         # history/undo state itself is NOT part of the document snapshot.
 
@@ -172,6 +180,8 @@ class AssemblyDocument:
             "rig_intent": copy.deepcopy(self.rig_intent),
             "expressions": copy.deepcopy(self.expressions),
             "composition": copy.deepcopy(self.composition),
+            "bake_plans": copy.deepcopy(self.bake_plans),
+            "remap_review": copy.deepcopy(self.remap_review),
             "provenance": self.provenance.to_dict(),
         }
 
@@ -189,6 +199,8 @@ class AssemblyDocument:
         )
         doc.expressions = copy.deepcopy(d.get("expressions", {}))
         doc.composition = copy.deepcopy(d.get("composition", {"draw_order": [], "canvas": {}}))
+        doc.bake_plans = copy.deepcopy(d.get("bake_plans", {}))
+        doc.remap_review = copy.deepcopy(d.get("remap_review"))
         doc.provenance = ProvenanceLog.from_dict(d.get("provenance", {}))
         return doc
 

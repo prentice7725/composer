@@ -29,6 +29,7 @@ from . import hierarchy as _hierarchy
 from .slots import is_known_slot
 from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, LOGICAL_SURFACES
 from .secondary_regions import GEOMETRY_KINDS, RESPONSE_PROFILES
+from .visual_ops import VisualOpError, validate_stack
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -194,6 +195,37 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
                 f"rig_intent.attachments[{attach_id!r}]: invalid mode {attach.get('mode')!r}; "
                 f"expected one of {ATTACHMENT_MODES!r}"
             )
+
+    # C6-A Bake Plan shape validation.  Analysis status is deliberately not
+    # recomputed here: validation must remain a side-effect-free document
+    # check, while bake_plan.analyze_bake_plan owns the current verdict.
+    for plan_id, plan in getattr(document, "bake_plans", {}).items():
+        if not isinstance(plan, dict):
+            errors.append(f"bake_plan {plan_id!r}: plan must be an object")
+            continue
+        if plan.get("plan_id", plan_id) != plan_id:
+            errors.append(f"bake_plan {plan_id!r}: plan_id does not match map key")
+        sources = plan.get("sources")
+        if not isinstance(sources, list) or any(not isinstance(item, str) or not item for item in sources):
+            errors.append(f"bake_plan {plan_id!r}: sources must be a list of non-empty instance ids")
+        if not isinstance(plan.get("result_semantic"), str) or not plan.get("result_semantic"):
+            errors.append(f"bake_plan {plan_id!r}: result_semantic must be non-empty")
+        if not isinstance(plan.get("result_slot"), str) or not plan.get("result_slot"):
+            errors.append(f"bake_plan {plan_id!r}: result_slot must be non-empty")
+        if plan.get("status") not in {"PLANNED", "RIG_CHECKED", "CAN_BAKE", "WARN", "BLOCK", "BAKED"}:
+            errors.append(f"bake_plan {plan_id!r}: invalid status {plan.get('status')!r}")
+        elif isinstance(sources, list):
+            missing_sources = [source_id for source_id in sources if source_id not in document.instances]
+            if missing_sources:
+                errors.append(f"bake_plan {plan_id!r}: unknown source instance(s): {missing_sources!r}")
+
+    # VisualOps are ordered authoring data.  Keep malformed stacks out of a
+    # saved bundle while leaving their evaluation side-effect free.
+    for instance_id, instance in document.instances.items():
+        try:
+            validate_stack(getattr(instance, "visual_ops", []))
+        except VisualOpError as exc:
+            errors.append(f"instance {instance_id!r}: invalid visual_ops: {exc}")
 
     # ExpressionPreset is a thin bundle of VariantSet members.  Keep it
     # explicit in the document, but never turn it into a new runtime system.

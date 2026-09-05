@@ -11,6 +11,7 @@ class UISessionState:
     selected_instance_ids: list[str] = field(default_factory=list)
     selected_asset_id: str | None = None
     active_context: str = "ASSEMBLE"
+    workspace_axis: str = "COMPOSE"
     canvas_zoom: float = 1.0
     canvas_pan: tuple[float, float] = (0.0, 0.0)
     tree_filter: str = ""

@@ -24,7 +24,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional, TYPE_CHECKING
 
-from PIL import Image
+from PIL import Image, ImageOps
+
+from .visual_ops import apply_visual_ops
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -36,9 +38,15 @@ def layer_image_path(layers_dir: Path, instance_id: str) -> Path:
 
 def _positioned(img: Image.Image, transform) -> tuple[Image.Image, tuple[int, int]]:
     w, h = img.size
-    if transform.scale_x != 1.0 or transform.scale_y != 1.0:
-        new_w = max(1, round(w * transform.scale_x))
-        new_h = max(1, round(h * transform.scale_y))
+    if transform.scale_x < 0:
+        img = ImageOps.mirror(img)
+    if transform.scale_y < 0:
+        img = ImageOps.flip(img)
+    scale_x = abs(transform.scale_x)
+    scale_y = abs(transform.scale_y)
+    if scale_x != 1.0 or scale_y != 1.0:
+        new_w = max(1, round(w * scale_x))
+        new_h = max(1, round(h * scale_y))
         img = img.resize((new_w, new_h), Image.LANCZOS)
         w, h = new_w, new_h
     ox, oy = 0, 0
@@ -59,6 +67,8 @@ def _composite(
     resolve_path: Callable[[str], Optional[Path]],
     canvas_size: tuple,
     transform_overrides: dict | None = None,
+    visual_ops_root: Path | None = None,
+    visual_ops_overrides: dict | None = None,
 ) -> Image.Image:
     width, height = canvas_size
     composite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -72,6 +82,11 @@ def _composite(
             raise FileNotFoundError(f"layer image missing for instance {inst_id!r}: {path}")
         with Image.open(path) as im:
             im = im.convert("RGBA")
+            # Canonical order: source -> serialized VisualOps -> instance
+            # opacity/transform -> composition.  Qt preview code must use the
+            # same operation evaluator and parameters.
+            visual_ops = (visual_ops_overrides or {}).get(inst_id, getattr(inst, "visual_ops", []))
+            im = apply_visual_ops(im, visual_ops, base_dir=visual_ops_root)
             if inst.opacity < 1.0:
                 r, g, b, a = im.split()
                 a = a.point(lambda v: round(v * inst.opacity))
@@ -105,7 +120,13 @@ def render_reference(document: "AssemblyDocument", layers_dir: Path) -> Image.Im
     if width is None or height is None:
         width, height = 1, 1
 
-    return _composite(document, draw_order, lambda iid: layer_image_path(layers_dir, iid), (width, height))
+    return _composite(
+        document,
+        draw_order,
+        lambda iid: layer_image_path(layers_dir, iid),
+        (width, height),
+        visual_ops_root=layers_dir.parent,
+    )
 
 
 def render_subset(
@@ -114,6 +135,7 @@ def render_subset(
     instance_ids: list,
     *,
     transform_overrides: dict | None = None,
+    visual_ops_overrides: dict | None = None,
 ) -> Image.Image:
     """Composites just ``instance_ids`` (in the given order), resolving each
     one's image through ``image_sources`` ({instance_id: Path}) instead of
@@ -125,10 +147,19 @@ def render_subset(
     if width is None or height is None:
         raise ValueError("render_subset requires document.composition['canvas'] to be set")
 
+    visual_ops_root = None
+    for source in image_sources.values():
+        if source:
+            source_path = Path(source)
+            visual_ops_root = source_path.parent.parent if source_path.parent.name == "layers" else source_path.parent
+            break
+
     return _composite(
         document,
         instance_ids,
         lambda iid: image_sources.get(iid),
         (width, height),
         transform_overrides=transform_overrides,
+        visual_ops_root=visual_ops_root,
+        visual_ops_overrides=visual_ops_overrides,
     )

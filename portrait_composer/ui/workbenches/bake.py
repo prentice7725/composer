@@ -11,6 +11,8 @@ would produce, never a second guess at it.
 from __future__ import annotations
 
 import re
+import tempfile
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -33,8 +35,10 @@ from PySide6.QtWidgets import (
 )
 
 from ...bake import BLOCK, CAN_BAKE, WARN, analyze_bake
+from ...bake_plan import PLAN_STATUSES
 from ...instances import Transform
 from ...profiles import BakeCandidate, FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile
+from ..commands import analyze_logical_bake_plan, apply_logical_plan, create_logical_bake_plan
 
 PROFILES = (PORTRAIT_STATIC, PORTRAIT_RIG, FULL_MOTION)
 VERDICT_TEXT = {CAN_BAKE: "CAN_BAKE ✓", WARN: "WARN !", BLOCK: "BLOCK ✗"}
@@ -395,6 +399,45 @@ class BakeWorkbench(QWidget):
         top.addWidget(self.bake_selected_button)
         outer.addLayout(top)
 
+        plan_box = QFrame()
+        plan_box.setFrameShape(QFrame.Shape.StyledPanel)
+        plan_layout = QHBoxLayout(plan_box)
+        plan_layout.addWidget(QLabel("Bake Plan"))
+        self.plan_id_edit = QLineEdit("torso_plan")
+        self.plan_id_edit.setAccessibleName("Bake plan id")
+        self.plan_id_edit.setPlaceholderText("plan id")
+        plan_layout.addWidget(self.plan_id_edit)
+        self.plan_result_edit = QLineEdit("topwear_with_arms")
+        self.plan_result_edit.setAccessibleName("Bake plan result semantic")
+        plan_layout.addWidget(self.plan_result_edit)
+        self.plan_slot_edit = QLineEdit("torso")
+        self.plan_slot_edit.setAccessibleName("Bake plan result slot")
+        plan_layout.addWidget(self.plan_slot_edit)
+        self.create_plan_button = QPushButton("Create Plan")
+        self.create_plan_button.setAccessibleName("Create bake plan")
+        self.create_plan_button.clicked.connect(self._create_plan)
+        plan_layout.addWidget(self.create_plan_button)
+        self.analyze_plan_button = QPushButton("Analyze Plan")
+        self.analyze_plan_button.setAccessibleName("Analyze selected bake plan")
+        self.analyze_plan_button.clicked.connect(self._analyze_plan)
+        plan_layout.addWidget(self.analyze_plan_button)
+        self.apply_plan_button = QPushButton("Apply Plan")
+        self.apply_plan_button.setAccessibleName("Apply selected bake plan")
+        self.apply_plan_button.clicked.connect(self._apply_plan)
+        plan_layout.addWidget(self.apply_plan_button)
+        outer.addWidget(plan_box)
+
+        plan_row = QHBoxLayout()
+        plan_row.addWidget(QLabel("Saved plans"))
+        self.plan_list = QListWidget()
+        self.plan_list.setAccessibleName("Saved bake plans")
+        self.plan_list.setMaximumHeight(60)
+        self.plan_list.currentTextChanged.connect(self._plan_selected)
+        plan_row.addWidget(self.plan_list, 1)
+        self.plan_status_label = QLabel("No plan selected")
+        plan_row.addWidget(self.plan_status_label)
+        outer.addLayout(plan_row)
+
         self.status_label = QLabel("")
         outer.addWidget(self.status_label)
 
@@ -418,6 +461,7 @@ class BakeWorkbench(QWidget):
         self.main_window.session.bake_analyzed = document is not None
         self._clear_cards()
         self._manual_candidate = None
+        self._refresh_plan_list()
         self.main_window.canvas.scene_model.clear_transient_preview()
         if document is None:
             self.status_label.setText("No document open.")
@@ -432,6 +476,82 @@ class BakeWorkbench(QWidget):
         self.status_label.setText(f"{profile}: {len(candidates)} candidate(s)")
         self._add_cards(candidates, profile)
         self._selection_changed()
+
+    def _refresh_plan_list(self) -> None:
+        document = self.main_window.document
+        current = self.plan_list.currentItem().text() if self.plan_list.currentItem() else None
+        self.plan_list.blockSignals(True)
+        self.plan_list.clear()
+        if document is not None:
+            self.plan_list.addItems(sorted(document.bake_plans))
+            if current in document.bake_plans:
+                self.plan_list.setCurrentRow(sorted(document.bake_plans).index(current))
+        self.plan_list.blockSignals(False)
+        self._plan_selected(self.plan_list.currentItem().text() if self.plan_list.currentItem() else "")
+
+    def _selected_plan_id(self) -> str | None:
+        item = self.plan_list.currentItem()
+        return item.text() if item is not None else None
+
+    def _plan_selected(self, plan_id: str) -> None:
+        document = self.main_window.document
+        plan = document.bake_plans.get(plan_id) if document is not None and plan_id else None
+        if plan is None:
+            self.plan_status_label.setText("No plan selected")
+            self.analyze_plan_button.setEnabled(False)
+            self.apply_plan_button.setEnabled(False)
+            return
+        self.plan_status_label.setText(f"{plan_id}: {plan.get('status', '—')}")
+        self.analyze_plan_button.setEnabled(True)
+        self.apply_plan_button.setEnabled(plan.get("status") not in {"BLOCK", "BAKED"})
+
+    def _create_plan(self) -> None:
+        document = self.main_window.document
+        sources = list(self.main_window.selection_model.instance_ids)
+        if document is None or len(sources) < 2:
+            self.status_label.setText("Select at least two Tree layers before creating a Bake Plan.")
+            return
+        plan_id = self.plan_id_edit.text().strip()
+        semantic = self.plan_result_edit.text().strip()
+        slot = self.plan_slot_edit.text().strip()
+        if not plan_id or not semantic or not slot:
+            self.status_label.setText("Plan id, result semantic, and result slot are required.")
+            return
+        if self.main_window.run_command(
+            lambda doc, image_sources: create_logical_bake_plan(
+                doc, image_sources, plan_id, sources=sources, result_semantic=semantic, result_slot=slot
+            )
+        ):
+            matches = self.plan_list.findItems(plan_id, Qt.MatchFlag.MatchExactly)
+            if matches:
+                self.plan_list.setCurrentRow(self.plan_list.row(matches[0]))
+
+    def _analyze_plan(self) -> None:
+        plan_id = self._selected_plan_id()
+        if plan_id is None:
+            return
+        self.main_window.run_command(lambda document, image_sources: analyze_logical_bake_plan(document, image_sources, plan_id))
+
+    def _apply_plan(self) -> None:
+        plan_id = self._selected_plan_id()
+        document = self.main_window.document
+        if plan_id is None or document is None:
+            return
+        plan = document.bake_plans.get(plan_id, {})
+        if plan.get("status") in {"BLOCK", "BAKED"}:
+            return
+        work_dir = Path(tempfile.mkdtemp(prefix="portrait-composer-plan-"))
+        result_holder = {}
+
+        def commit(doc, image_sources):
+            result_holder["result"] = apply_logical_plan(doc, image_sources, plan_id, work_dir=work_dir, profile=self._current_profile())
+
+        if self.main_window.run_command(commit):
+            derived_id, warnings = result_holder["result"]
+            self.main_window.selection_model.select(derived_id)
+            self.main_window.statusBar().showMessage(
+                f"Bake Plan {plan_id!r} applied as {derived_id} ({len(warnings)} warning(s))", 8000
+            )
 
     def _clear_cards(self) -> None:
         while self.cards_layout.count():

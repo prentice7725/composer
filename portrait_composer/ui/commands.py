@@ -15,9 +15,20 @@ from .. import secondary_regions as _secondary_regions
 from .. import slots as _slots
 from .. import variants as _variants
 from ..assembly import apply_recipe, harvest_instance, set_draw_order
+from ..bake_plan import analyze_bake_plan, apply_bake_plan as apply_logical_bake_plan, create_bake_plan
 from ..donors import DonorImportResult, import_donor
 from ..expressions import apply_expression_preset, create_expression_preset, update_expression_preset
 from ..profiles import apply_candidate as _apply_bake_candidate
+from ..visual_ops import add_visual_op, reset_visual_ops, update_visual_op
+from ..mask_ops import edit_mask_stroke
+from ..transform_ops import (
+    align_instance,
+    fit_instance,
+    flip_transform,
+    nudge_transform,
+    reset_transform,
+    set_uniform_scale,
+)
 
 
 def _instance(document, instance_id: str):
@@ -61,6 +72,70 @@ def set_instance_visible(document, image_sources, instance_id: str, visible: boo
 def set_instance_opacity(document, image_sources, instance_id: str, opacity: float) -> None:
     recipe = {"operations": [{"op": "set_opacity", "instance": instance_id, "value": float(opacity)}]}
     apply_recipe(document, recipe, image_sources)
+
+
+def add_instance_mask(document, image_sources, instance_id: str, *, op_id: str, path: str) -> None:
+    add_visual_op(document, instance_id, {"id": op_id, "type": "mask", "params": {"path": path}})
+
+
+def add_instance_quad_warp(document, image_sources, instance_id: str, *, op_id: str, quad: list[float]) -> None:
+    add_visual_op(document, instance_id, {"id": op_id, "type": "quad_warp", "params": {"quad": list(quad)}})
+
+
+def update_instance_mask(document, image_sources, instance_id: str, *, op_id: str, **params) -> None:
+    update_visual_op(document, instance_id, op_id, params=params)
+
+
+def reset_instance_masks(document, image_sources, instance_id: str) -> None:
+    reset_visual_ops(document, instance_id)
+
+
+def paint_instance_mask(
+    document,
+    image_sources,
+    instance_id: str,
+    *,
+    op_id: str,
+    points: list[tuple[float, float]],
+    radius: float,
+    mode: str,
+    work_dir,
+    base_dir=None,
+) -> None:
+    edit_mask_stroke(
+        document,
+        instance_id,
+        op_id,
+        points=points,
+        radius=radius,
+        mode=mode,
+        work_dir=work_dir,
+        base_dir=base_dir,
+    )
+
+
+def reset_instance_transform(document, image_sources, instance_id: str) -> None:
+    reset_transform(document, instance_id)
+
+
+def set_instance_uniform_scale(document, image_sources, instance_id: str, scale: float) -> None:
+    set_uniform_scale(document, instance_id, scale)
+
+
+def flip_instance(document, image_sources, instance_id: str, *, horizontal: bool = False, vertical: bool = False) -> None:
+    flip_transform(document, instance_id, horizontal=horizontal, vertical=vertical)
+
+
+def nudge_instance(document, image_sources, instance_id: str, *, dx: float = 0.0, dy: float = 0.0) -> None:
+    nudge_transform(document, instance_id, dx=dx, dy=dy)
+
+
+def fit_instance_to_target(document, image_sources, instance_id: str, *, mode: str, image_size: tuple[int, int], target=None) -> None:
+    fit_instance(document, instance_id, mode=mode, image_size=image_size, target=target)
+
+
+def align_instance_to_target(document, image_sources, instance_id: str, *, anchor: str, image_size: tuple[int, int], target=None) -> None:
+    align_instance(document, instance_id, anchor=anchor, image_size=image_size, target=target)
 
 
 def set_instance_slot(document, image_sources, instance_id: str, slot: str) -> None:
@@ -257,6 +332,24 @@ def bake_candidate(
         ordered_instance_ids=ordered_instance_ids,
         transform_overrides=transform_overrides,
     )
+
+
+def create_logical_bake_plan(document, image_sources, plan_id: str, *, sources: list[str], result_semantic: str, result_slot: str) -> dict:
+    return create_bake_plan(
+        document,
+        plan_id,
+        sources=sources,
+        result_semantic=result_semantic,
+        result_slot=result_slot,
+    )
+
+
+def analyze_logical_bake_plan(document, image_sources, plan_id: str):
+    return analyze_bake_plan(document, plan_id)
+
+
+def apply_logical_plan(document, image_sources, plan_id: str, *, work_dir, profile: str | None = None):
+    return apply_logical_bake_plan(document, image_sources, plan_id, work_dir=work_dir, profile=profile)
 
 
 def reorder_draw_order(document, new_order: list) -> None:

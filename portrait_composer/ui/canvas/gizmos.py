@@ -166,6 +166,8 @@ class TransformGizmo:
             delta = scene_pos - drag.center_scene
             drag.start_angle = math.degrees(math.atan2(delta.y(), delta.x()))
         self.drag = drag
+        self.scene.preview_state.begin()
+        self.scene.preview_state.set_transform(self.instance_id, drag.start_transform)
         return True
 
     def update_drag(self, scene_pos: QPointF, preserve_aspect: bool) -> None:
@@ -199,6 +201,29 @@ class TransformGizmo:
             delta = scene_pos - drag.center_scene
             current_angle = math.degrees(math.atan2(delta.y(), delta.x()))
             self.target_item.setRotation(drag.start_rotation + (current_angle - drag.start_angle))
+        self.scene.preview_state.set_transform(self.instance_id, self._current_preview_transform(drag))
+
+    def _current_preview_transform(self, drag: _Drag) -> dict:
+        """Read the proxy item into a transient transform override."""
+        preview = dict(drag.start_transform)
+        if self.target_item is None:
+            return preview
+        if drag.kind == "move":
+            position = self.target_item.pos()
+            preview.update(x=position.x(), y=position.y())
+        elif drag.kind == "scale":
+            rect = self.target_item.rect()
+            scale_x = rect.width() / drag.image_w
+            scale_y = rect.height() / drag.image_h
+            preview.update(
+                scale_x=scale_x,
+                scale_y=scale_y,
+                x=drag.start_transform["x"] + drag.image_w * drag.start_transform["scale_x"] / 2.0 - drag.image_w * scale_x / 2.0,
+                y=drag.start_transform["y"] + drag.image_h * drag.start_transform["scale_y"] / 2.0 - drag.image_h * scale_y / 2.0,
+            )
+        elif drag.kind == "rotate":
+            preview["rotation"] = self.target_item.rotation()
+        return preview
 
     def cancel_drag(self) -> None:
         drag = self.drag
@@ -209,6 +234,7 @@ class TransformGizmo:
         self.target_item.setPos(drag.start_pos)
         self.target_item.setRotation(drag.start_rotation)
         self.target_item.setTransformOriginPoint(drag.start_rect.center())
+        self.scene.preview_state.clear()
         self.reposition()
 
     def end_drag(self) -> Optional[dict]:
@@ -252,5 +278,6 @@ class TransformGizmo:
             self.target_item.setPos(drag.start_pos)
             self.target_item.setRotation(drag.start_rotation)
             self.target_item.setTransformOriginPoint(drag.start_rect.center())
+        self.scene.preview_state.clear()
         self.reposition()
         return fields or None

@@ -26,8 +26,18 @@ see STATUS.md in the repo root for what's implemented vs. deferred.
 from .assembly import HarvestError, RecipeError, harvest_assembly, identity_assembly, set_draw_order
 from .assets import AssetDefinition
 from .bake import BakeBlockedError, BakeError, analyze_bake, apply_bake_plan
+from .bake_plan import (
+    PLAN_STATUSES,
+    analyze_bake_plan,
+    apply_bake_plan as apply_logical_bake_plan,
+    create_bake_plan,
+    remove_bake_plan,
+    update_bake_plan,
+)
 from .document import AssemblyDocument, DuplicateIdError, TransactionValidationError
 from .donors import DonorDriftError, DonorError, DonorImportResult, import_donor
+from .rig_bundle import RigBundleError, export_rig_bundle, validate_exported_rig_bundle, validate_rig_export
+from .remap import apply_remap_resolution
 from .expressions import ExpressionError, apply_expression_preset, create_expression_preset
 from .instances import LayerInstance, Transform
 from .profiles import FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile, apply_candidate
@@ -41,6 +51,8 @@ from .secondary_regions import (
     visual_preflight,
 )
 from .sources import SourceAsset, SourceBinding, SourceRevision
+from .transform_ops import TransformOpError, align_instance, fit_instance, flip_transform, nudge_transform, reset_transform, set_uniform_scale
+from .visual_ops import VisualOpError, add_visual_op, apply_visual_ops
 
 __all__ = [
     "AssemblyDocument",
@@ -61,6 +73,12 @@ __all__ = [
     "apply_bake_plan",
     "BakeError",
     "BakeBlockedError",
+    "PLAN_STATUSES",
+    "create_bake_plan",
+    "update_bake_plan",
+    "remove_bake_plan",
+    "analyze_bake_plan",
+    "apply_logical_bake_plan",
     "analyze_profile",
     "apply_candidate",
     "PORTRAIT_STATIC",
@@ -77,12 +95,27 @@ __all__ = [
     "PREFLIGHT_DEGRADED",
     "PREFLIGHT_DISABLED",
     "import_donor",
+    "RigBundleError",
+    "validate_exported_rig_bundle",
+    "export_rig_bundle",
+    "validate_rig_export",
+    "apply_remap_resolution",
     "DonorError",
     "DonorDriftError",
     "DonorImportResult",
     "create_expression_preset",
     "apply_expression_preset",
     "ExpressionError",
+    "TransformOpError",
+    "set_uniform_scale",
+    "flip_transform",
+    "reset_transform",
+    "nudge_transform",
+    "fit_instance",
+    "align_instance",
+    "VisualOpError",
+    "add_visual_op",
+    "apply_visual_ops",
 ]
 
 __version__ = "0.2.0-c4"
