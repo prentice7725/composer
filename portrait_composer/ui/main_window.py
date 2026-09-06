@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QStackedWidget,
+    QSizePolicy,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -100,6 +101,8 @@ class MainWindow(QMainWindow):
         # hint as its minimum, which makes the bottom dock consume half the
         # window even when the active workbench is compact.
         self.workbench.setMinimumHeight(160)
+        self.workbench.setMinimumWidth(0)
+        self.workbench.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.workbench.addWidget(self.workbench_placeholder)
         self.workbench.addWidget(self.harvest_workbench)
         self.workbench.addWidget(self.variant_workbench)
@@ -122,8 +125,18 @@ class MainWindow(QMainWindow):
 
         dock = QDockWidget("Context Workbench", self)
         dock.setObjectName("contextWorkbenchDock")
+        # The workbench is a bottom task strip.  Restricting its dock area
+        # prevents an old saved layout from restoring it as a full-height
+        # right-side panel, where the vertical resize policy cannot apply.
+        dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
         dock.setWidget(self.workbench)
         return dock
+
+    def _normalize_workbench_dock(self) -> None:
+        """Move legacy/restored workbench layouts back to the bottom strip."""
+        bottom = Qt.DockWidgetArea.BottomDockWidgetArea
+        if self.dockWidgetArea(self.workbench_dock) != bottom:
+            self.addDockWidget(bottom, self.workbench_dock)
 
     def _set_workbench_message(self, text: str) -> None:
         self.workbench_placeholder.setText(text)
@@ -460,13 +473,9 @@ class MainWindow(QMainWindow):
         if context == "ASSEMBLE":
             self.workbench_dock.hide()
         else:
+            self._normalize_workbench_dock()
             self.workbench_dock.show()
             self.workbench_dock.raise_()
-            self.resizeDocks(
-                [self.workbench_dock],
-                [self.WORKBENCH_DEFAULT_HEIGHT],
-                Qt.Orientation.Vertical,
-            )
         for name, button in self.context_buttons.items():
             button.setChecked(name == context)
         for name, button in getattr(self, "workspace_buttons", {}).items():
@@ -494,6 +503,14 @@ class MainWindow(QMainWindow):
             self.workbench.setCurrentWidget(self.bake_workbench)
         else:
             self._set_workbench_message(f"{context} Workbench\nSelection remains active while context changes.")
+        if context != "ASSEMBLE":
+            # Refreshing the active stacked page can change its size hint, so
+            # normalize after the page switch as well as before it.
+            self.resizeDocks(
+                [self.workbench_dock],
+                [self.WORKBENCH_DEFAULT_HEIGHT],
+                Qt.Orientation.Vertical,
+            )
         if previous == "RIG INTENT" and context != "RIG INTENT":
             # The two_lobe canvas overlay is this workspace's own transient
             # editing aid (directive #18); it isn't part of any other

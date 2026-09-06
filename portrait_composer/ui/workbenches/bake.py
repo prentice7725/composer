@@ -134,7 +134,7 @@ class _CandidateCard(QFrame):
         seam_row.addWidget(self.seam_cleanup)
         seam_row.addWidget(QLabel("Expand Under"))
         self.expand_under = QSpinBox()
-        self.expand_under.setRange(0, 2)
+        self.expand_under.setRange(0, 4)
         self.expand_under.setSuffix(" px")
         self.expand_under.setValue(1)
         self.expand_under.setAccessibleName(f"Under-layer expansion for {candidate.label}")
@@ -145,6 +145,30 @@ class _CandidateCard(QFrame):
         seam_row.addWidget(self.remove_internal_lines)
         seam_row.addStretch(1)
         outer.addLayout(seam_row)
+
+        # Advanced seam controls are still part of the recipe, so changing
+        # them must immediately re-render the transient preview.
+        advanced_row = QHBoxLayout()
+        advanced_row.addWidget(QLabel("Contact Band"))
+        self.contact_band = QSpinBox()
+        self.contact_band.setRange(1, 4)
+        self.contact_band.setSuffix(" px")
+        self.contact_band.setAccessibleName(f"Contact band for {candidate.label}")
+        advanced_row.addWidget(self.contact_band)
+        advanced_row.addWidget(QLabel("Tone Blend"))
+        self.tone_blend_width = QSpinBox()
+        self.tone_blend_width.setRange(0, 2)
+        self.tone_blend_width.setSuffix(" px")
+        self.tone_blend_width.setAccessibleName(f"Tone blend width for {candidate.label}")
+        advanced_row.addWidget(self.tone_blend_width)
+        advanced_row.addWidget(QLabel("Alpha Blend"))
+        self.alpha_blend_width = QSpinBox()
+        self.alpha_blend_width.setRange(0, 2)
+        self.alpha_blend_width.setSuffix(" px")
+        self.alpha_blend_width.setAccessibleName(f"Alpha blend width for {candidate.label}")
+        advanced_row.addWidget(self.alpha_blend_width)
+        advanced_row.addStretch(1)
+        outer.addLayout(advanced_row)
 
         self.ownership_rule = QComboBox()
         self.ownership_rule.addItem("None", None)
@@ -158,6 +182,29 @@ class _CandidateCard(QFrame):
         ownership_row.addWidget(self.ownership_rule)
         ownership_row.addStretch(1)
         outer.addLayout(ownership_row)
+        defaults = normalize_seam_policy(
+            None,
+            result_semantic=candidate.label,
+            # Keep the seam controls ready for the semantic-merge mode even
+            # when a generic candidate initially opens in Flatten mode.
+            mode="semantic_merge",
+        )
+        self.seam_cleanup.setCurrentIndex(self.seam_cleanup.findData(defaults["cleanup"]))
+        self.expand_under.setValue(defaults["expand_under"])
+        self.remove_internal_lines.setChecked(defaults["remove_internal_lines"])
+        self.contact_band.setValue(defaults["contact_band_px"])
+        self.tone_blend_width.setValue(defaults["tone_blend_width"])
+        self.alpha_blend_width.setValue(defaults["alpha_blend_width"])
+        for control, signal in (
+            (self.seam_cleanup, self.seam_cleanup.currentIndexChanged),
+            (self.expand_under, self.expand_under.valueChanged),
+            (self.remove_internal_lines, self.remove_internal_lines.stateChanged),
+            (self.ownership_rule, self.ownership_rule.currentIndexChanged),
+            (self.contact_band, self.contact_band.valueChanged),
+            (self.tone_blend_width, self.tone_blend_width.valueChanged),
+            (self.alpha_blend_width, self.alpha_blend_width.valueChanged),
+        ):
+            signal.connect(lambda *_args: self._seam_controls_changed())
         self._seam_mode_changed()
 
         outer.addWidget(QLabel("Sources"))
@@ -353,6 +400,9 @@ class _CandidateCard(QFrame):
                 "cleanup": self.seam_cleanup.currentData(),
                 "expand_under": self.expand_under.value(),
                 "remove_internal_lines": self.remove_internal_lines.isChecked(),
+                "contact_band_px": self.contact_band.value(),
+                "tone_blend_width": self.tone_blend_width.value(),
+                "alpha_blend_width": self.alpha_blend_width.value(),
                 "ownership_rule": self.ownership_rule.currentData(),
             },
             result_semantic=self._output_name() or self.candidate.label,
@@ -365,6 +415,10 @@ class _CandidateCard(QFrame):
         self.expand_under.setEnabled(semantic_merge)
         self.remove_internal_lines.setEnabled(semantic_merge)
         self.ownership_rule.setEnabled(semantic_merge)
+        if hasattr(self, "mode_group"):
+            self._update_preview_from_staging()
+
+    def _seam_controls_changed(self) -> None:
         if hasattr(self, "mode_group"):
             self._update_preview_from_staging()
 
@@ -517,8 +571,8 @@ class BakeWorkbench(QWidget):
         plan_options.addWidget(self.plan_cleanup_combo)
         plan_options.addWidget(QLabel("Expand Under"))
         self.plan_expand_under = QSpinBox()
-        self.plan_expand_under.setRange(0, 2)
-        self.plan_expand_under.setValue(1)
+        self.plan_expand_under.setRange(0, 4)
+        self.plan_expand_under.setValue(3)
         self.plan_expand_under.setSuffix(" px")
         self.plan_expand_under.setAccessibleName("Bake plan under-layer expansion")
         plan_options.addWidget(self.plan_expand_under)
@@ -526,6 +580,27 @@ class BakeWorkbench(QWidget):
         self.plan_remove_internal_lines.setChecked(True)
         self.plan_remove_internal_lines.setAccessibleName("Bake plan remove internal seam lines")
         plan_options.addWidget(self.plan_remove_internal_lines)
+        plan_options.addWidget(QLabel("Contact Band"))
+        self.plan_contact_band = QSpinBox()
+        self.plan_contact_band.setRange(1, 4)
+        self.plan_contact_band.setValue(2)
+        self.plan_contact_band.setSuffix(" px")
+        self.plan_contact_band.setAccessibleName("Bake plan contact band")
+        plan_options.addWidget(self.plan_contact_band)
+        plan_options.addWidget(QLabel("Tone Blend"))
+        self.plan_tone_blend_width = QSpinBox()
+        self.plan_tone_blend_width.setRange(0, 2)
+        self.plan_tone_blend_width.setValue(1)
+        self.plan_tone_blend_width.setSuffix(" px")
+        self.plan_tone_blend_width.setAccessibleName("Bake plan tone blend width")
+        plan_options.addWidget(self.plan_tone_blend_width)
+        plan_options.addWidget(QLabel("Alpha Blend"))
+        self.plan_alpha_blend_width = QSpinBox()
+        self.plan_alpha_blend_width.setRange(0, 2)
+        self.plan_alpha_blend_width.setValue(1)
+        self.plan_alpha_blend_width.setSuffix(" px")
+        self.plan_alpha_blend_width.setAccessibleName("Bake plan alpha blend width")
+        plan_options.addWidget(self.plan_alpha_blend_width)
         plan_options.addStretch(1)
         outer.addLayout(plan_options)
 
@@ -613,6 +688,12 @@ class BakeWorkbench(QWidget):
             self.plan_expand_under.setValue(int(policy["expand_under"]))
         if policy.get("remove_internal_lines") is not None:
             self.plan_remove_internal_lines.setChecked(bool(policy["remove_internal_lines"]))
+        if policy.get("contact_band_px") is not None:
+            self.plan_contact_band.setValue(int(policy["contact_band_px"]))
+        if policy.get("tone_blend_width") is not None:
+            self.plan_tone_blend_width.setValue(int(policy["tone_blend_width"]))
+        if policy.get("alpha_blend_width") is not None:
+            self.plan_alpha_blend_width.setValue(int(policy["alpha_blend_width"]))
         self.plan_status_label.setText(f"{plan_id}: {plan.get('status', '—')}")
         self.analyze_plan_button.setEnabled(True)
         self.apply_plan_button.setEnabled(plan.get("status") not in {"BLOCK", "BAKED"})
@@ -635,6 +716,9 @@ class BakeWorkbench(QWidget):
                 "cleanup": self.plan_cleanup_combo.currentData(),
                 "expand_under": self.plan_expand_under.value(),
                 "remove_internal_lines": self.plan_remove_internal_lines.isChecked(),
+                "contact_band_px": self.plan_contact_band.value(),
+                "tone_blend_width": self.plan_tone_blend_width.value(),
+                "alpha_blend_width": self.plan_alpha_blend_width.value(),
                 "ownership_rule": semantic if semantic in BAKE_PROFILES else None,
             },
             result_semantic=semantic,

@@ -82,6 +82,20 @@ def test_workspace_axis_navigates_and_persists(qapp, tmp_path: Path):
     second.close()
 
 
+def test_context_workbench_is_normalized_to_compact_bottom_dock(qapp, tmp_path: Path):
+    window = MainWindow(settings=_settings(tmp_path / "dock.ini"))
+    window.show()
+    qapp.processEvents()
+
+    window.set_context("BAKE")
+    qapp.processEvents()
+
+    assert window.dockWidgetArea(window.workbench_dock) == Qt.DockWidgetArea.BottomDockWidgetArea
+    assert window.workbench_dock.allowedAreas() == Qt.DockWidgetArea.BottomDockWidgetArea
+    assert window.workbench_dock.height() <= 360
+    window.close()
+
+
 def test_recent_files_are_bounded_deduplicated_and_clearable(qapp, tmp_path: Path):
     window = MainWindow(settings=_settings(tmp_path / "recent.ini"))
     paths = [tmp_path / f"assembly-{index}" for index in range(window.MAX_RECENT_FILES + 2)]

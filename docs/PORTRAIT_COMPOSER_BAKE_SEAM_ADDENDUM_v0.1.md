@@ -19,15 +19,18 @@ asset provenance.
 ```json
 {
   "cleanup": "auto",
-  "expand_under": 1,
+  "expand_under": 3,
   "remove_internal_lines": true,
-  "contact_band_px": 1,
+  "contact_band_px": 2,
+  "tone_blend_width": 1,
+  "alpha_blend_width": 1,
   "ownership_rule": "topwear_with_arms"
 }
 ```
 
-`cleanup` is `off | auto | aggressive`; `expand_under` is `0..2` and
-`contact_band_px` is `1..2`. Named profiles currently include
+`cleanup` is `off | auto | aggressive`; `expand_under` is `0..4` and
+`contact_band_px` is `1..4`. `tone_blend_width` and `alpha_blend_width`
+are `0..2`. Named profiles currently include
 `topwear_with_arms`, `body_with_sleeves`, and `coat_full`.
 
 The implementation performs source composite, contact-zone detection,

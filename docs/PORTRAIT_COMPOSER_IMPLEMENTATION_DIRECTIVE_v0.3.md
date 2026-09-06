@@ -174,9 +174,13 @@ Bake는 **선택된 여러 레이어를 실제 하나의 derived raster layer로
 
 Bake는 `flatten`과 `semantic_merge` 두 모드를 가진다. 일반 합성은
 `flatten`을 사용하고, `topwear_with_arms`처럼 새 semantic surface를 만드는
-경우 `semantic_merge`를 사용한다. Semantic merge는 contact zone을 검사하고
-seam repair, under-layer expansion, 필요 시 internal line cleanup과
-ownership rule을 적용한다. Source PNG와 mask는 수정하지 않는다.
+경우 `semantic_merge`를 사용한다. Semantic merge는
+`contact zone → shared join edge → ownership → RGB+alpha edge bleed →
+internal line replacement → narrow-band tone/alpha blend` 순서의
+boundary-aware merge-repair를 수행한다. Source PNG와 mask는 수정하지
+않는다. `seam_policy`는 `cleanup`, `expand_under`, `remove_internal_lines`,
+`contact_band_px`, `tone_blend_width`, `alpha_blend_width`,
+`ownership_rule`을 저장하며 preview와 final bake가 같은 정책을 사용한다.
 
 담당:
 

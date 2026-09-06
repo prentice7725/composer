@@ -255,7 +255,7 @@ def test_bake_plan_ui_creates_and_analyzes_without_raster_output(window):
     assert "ui_plan" in window.document.bake_plans
     assert window.document.bake_plans["ui_plan"]["status"] == "PLANNED"
     assert window.document.bake_plans["ui_plan"]["mode"] == "semantic_merge"
-    assert window.document.bake_plans["ui_plan"]["seam_policy"]["expand_under"] == 1
+    assert window.document.bake_plans["ui_plan"]["seam_policy"]["expand_under"] == 3
     assert not any(asset_id == "torso_with_arms" for asset_id in window.document.assets)
 
     wb._analyze_plan()

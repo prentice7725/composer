@@ -60,13 +60,15 @@
     },
     "seamPolicy": {
       "type": "object",
-      "required": ["cleanup", "expand_under", "remove_internal_lines", "contact_band_px", "ownership_rule"],
+      "required": ["cleanup", "expand_under", "remove_internal_lines", "contact_band_px", "tone_blend_width", "alpha_blend_width", "ownership_rule"],
       "additionalProperties": false,
       "properties": {
         "cleanup": { "type": "string", "enum": ["off", "auto", "aggressive"] },
-        "expand_under": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "expand_under": { "type": "integer", "minimum": 0, "maximum": 4 },
         "remove_internal_lines": { "type": "boolean" },
-        "contact_band_px": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "contact_band_px": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "tone_blend_width": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "alpha_blend_width": { "type": "integer", "minimum": 0, "maximum": 2 },
         "ownership_rule": { "type": ["string", "null"] }
       }
     }

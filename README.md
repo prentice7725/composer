@@ -14,9 +14,12 @@ C5-A through C5-I GUI features implemented**; AutoRig runtime remains a
 separate concern).
 
 The Composer GUI (C5-A through C5-I) is implemented as an optional PySide6 client. To
-use it, install `pip install -e ".[gui]"` and run
-`portrait-composer-gui [ASSEMBLY_BUNDLE]`. Core/CLI commands do not require
-PySide6.
+use it, install `pip install -e ".[gui]"` and run either
+`portrait-composer-gui` or `portrait-composer-gui "C:\\path\\to\\ASSEMBLY_BUNDLE"`.
+The brackets in the old shorthand were documentation notation, not literal
+characters. If the editable console script is unavailable in an existing
+virtual environment, the equivalent fallback is
+`python -m portrait_composer.gui`. Core/CLI commands do not require PySide6.
 
 ## Install
 
