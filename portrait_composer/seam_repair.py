@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 BAKE_MODES = ("flatten", "semantic_merge")
 SEAM_CLEANUP_MODES = ("off", "auto", "aggressive")
@@ -22,6 +22,13 @@ _DEFAULT_SEAM_POLICY = {
     "alpha_blend_width": 1,
     "ownership_rule": None,
 }
+
+# v0.3 hotfix constants are deliberately internal.  They are not runtime
+# physics and are not part of the saved seam-policy contract yet.
+_INWARD_JOIN_BAND_PX = 4
+_INSET_OVERLAP_BAND_PX = 2
+_INSET_CONTRAST_THRESHOLD = 24
+_INSET_LOCAL_CONTRAST_THRESHOLD = 10
 
 BAKE_PROFILES = {
     "topwear_with_arms": {
@@ -311,10 +318,169 @@ def _replace_rgb(base: Image.Image, fill: Image.Image, mask: Image.Image) -> Ima
     return Image.composite(fill, base, mask)
 
 
+def _is_inset_cleanup_source(semantic: str, rule: str | None) -> bool:
+    """Limit the hotfix to the source whose contour becomes an inner join.
+
+    For the named topwear profile, the garment is the likely borrowed contour
+    source.  This prevents a dark hand/skin contour from being treated as a
+    topwear cleanup target merely because the layers overlap.
+    """
+    if rule != "topwear_with_arms":
+        return True
+    semantic = semantic.casefold()
+    return any(token in semantic for token in ("topwear", "upper_torso", "garment", "cloth", "coat"))
+
+
+def _visible_source_mask(
+    layers: list[tuple[str, str, Image.Image]], index: int
+) -> Image.Image:
+    """Return a conservative mask for pixels actually visible from a source."""
+    source_alpha = layers[index][2].getchannel("A").point(lambda value: 255 if value >= 200 else 0)
+    later_alpha = Image.new("L", source_alpha.size, 0)
+    for _, _, later in layers[index + 1:]:
+        later_binary = later.getchannel("A").point(lambda value: 255 if value >= 200 else 0)
+        later_alpha = _mask_or(later_alpha, later_binary)
+    return ImageChops.subtract(source_alpha, later_alpha)
+
+
+def _opaque_inset_join_mask(
+    layers: list[tuple[str, str, Image.Image]],
+    index: int,
+    overlap_band_px: int = _INSET_OVERLAP_BAND_PX,
+) -> tuple[Image.Image, Image.Image]:
+    """Find a conservative opaque, dark contour inside a source join.
+
+    The candidate is restricted to the source's 2..4px inward alpha band and
+    to pixels near another source.  A pixel must also be both dark against a
+    clean sample of its own interior and locally darker than its neighbors.
+    The one-pixel outer edge is excluded to protect true silhouettes,
+    straps, and neckline edges from an aggressive global erase.
+    """
+    _, _, source = layers[index]
+    size = source.size
+    blank = Image.new("L", size, 0)
+    other_alpha = Image.new("L", size, 0)
+    for other_index, (_, _, other) in enumerate(layers):
+        if other_index == index:
+            continue
+        other_binary = other.getchannel("A").point(lambda value: 255 if value >= 128 else 0)
+        other_alpha = _mask_or(other_alpha, other_binary)
+
+    binary_alpha = source.getchannel("A").point(lambda value: 255 if value >= 128 else 0)
+    inward = ImageChops.subtract(binary_alpha, _erode(binary_alpha, _INWARD_JOIN_BAND_PX))
+    outer_edge = ImageChops.subtract(binary_alpha, _erode(binary_alpha, 1))
+    inset_band = ImageChops.subtract(inward, outer_edge)
+    candidate = ImageChops.multiply(inset_band, _dilate(other_alpha, overlap_band_px))
+    candidate = ImageChops.multiply(candidate, _visible_source_mask(layers, index))
+    if candidate.getbbox() is None:
+        return blank, candidate
+
+    source_gray = ImageOps.grayscale(source)
+    # The candidate may itself be a 2..4px inset contour, so the usual
+    # edge-clean sample (radius 3) can still land on that contour.  Sample
+    # farther into the source for this pass; if the source is too narrow the
+    # helper safely falls back to its thresholded alpha core.
+    clean_fill = _clean_interior_fill(source, erode_radius=5, bleed_radius=8)
+    fill_gray = ImageOps.grayscale(clean_fill)
+    # Shoulder outlines can be brown/gray on light skin rather than black.
+    # Detect contrast against the source's own interior and local neighbors;
+    # an absolute luminance cutoff leaves those visible seams untouched.
+    fill_contrast = ImageChops.subtract(fill_gray, source_gray).point(
+        lambda value: 255 if value >= _INSET_CONTRAST_THRESHOLD else 0
+    )
+    local_highlight = ImageChops.subtract(
+        source_gray.filter(ImageFilter.GaussianBlur(1.1)), source_gray
+    ).point(lambda value: 255 if value >= _INSET_LOCAL_CONTRAST_THRESHOLD else 0)
+    detected = candidate
+    detected = ImageChops.multiply(detected, fill_contrast)
+    detected = ImageChops.multiply(detected, local_highlight)
+    return detected, candidate
+
+
+def _cleanup_opaque_inset_join_lines(
+    repaired: Image.Image,
+    layers: list[tuple[str, str, Image.Image]],
+    ownership_rule: str | None,
+) -> tuple[Image.Image, int, int]:
+    """Replace detected inset ink with each source's clean interior RGB."""
+    candidate_pixels = 0
+    removed_pixels = 0
+    for index, (_, semantic, source) in enumerate(layers):
+        if not _is_inset_cleanup_source(semantic, ownership_rule):
+            continue
+        detected, candidate = _opaque_inset_join_mask(layers, index)
+        candidate_pixels += _count(candidate)
+        if detected.getbbox() is None:
+            continue
+        fill = _clean_interior_fill(source, erode_radius=5, bleed_radius=8)
+        repaired = _replace_rgb(repaired, fill, detected)
+        removed_pixels += _count(detected)
+    return repaired, candidate_pixels, removed_pixels
+
+
+def _interior_contour_protection(layers, contact: Image.Image) -> Image.Image:
+    """Preserve connected creases that leave the narrow alpha join band.
+
+    Alpha proximity alone cannot distinguish an armpit/garment crease from
+    a segmentation outline. Prefer keeping an ambiguous connected contour
+    when it extends into the source interior. Inspect source pixels before
+    any repainting, and only protect contributions visible in the composite.
+    """
+    protected = Image.new("L", contact.size, 0)
+    width, height = contact.size
+    for index, (_, _, source) in enumerate(layers):
+        alpha = source.getchannel("A").point(lambda v: 255 if v >= 128 else 0)
+        core = _erode(alpha, _INWARD_JOIN_BAND_PX)
+        gray = ImageOps.grayscale(source)
+        ink = ImageChops.subtract(gray.filter(ImageFilter.GaussianBlur(1.1)), gray).point(
+            lambda v: 255 if v >= _INSET_LOCAL_CONTRAST_THRESHOLD else 0
+        )
+        ink = ImageChops.multiply(ink, alpha)
+        seeds = ImageChops.multiply(ink, ImageChops.subtract(alpha, core))
+        seeds = ImageChops.multiply(seeds, contact)
+        if seeds.getbbox() is None:
+            continue
+        remaining = bytearray(ink.tobytes())
+        interior = core.tobytes()
+        keep = bytearray(width * height)
+        for seed, value in enumerate(seeds.tobytes()):
+            if not value or not remaining[seed]:
+                continue
+            pending = [seed]
+            remaining[seed] = 0
+            component = []
+            reaches_interior = False
+            while pending:
+                pixel = pending.pop()
+                component.append(pixel)
+                reaches_interior |= bool(interior[pixel])
+                y, x = divmod(pixel, width)
+                for ny in range(max(0, y - 1), min(height, y + 2)):
+                    for nx in range(max(0, x - 1), min(width, x + 2)):
+                        neighbor = ny * width + nx
+                        if remaining[neighbor]:
+                            remaining[neighbor] = 0
+                            pending.append(neighbor)
+            if reaches_interior:
+                for pixel in component:
+                    keep[pixel] = 255
+        mask = Image.frombytes("L", contact.size, bytes(keep))
+        mask = ImageChops.multiply(mask, _visible_source_mask(layers, index))
+        # The interior sampling pass reaches five pixels inward. Protect
+        # that neighborhood too, including pixels across the alpha edge,
+        # to avoid repainting a halo beside a preserved crease.
+        mask = _dilate(mask, 5)
+        protected = _mask_or(protected, mask)
+    return protected
+
+
 def repair_semantic_merge(
     composite: Image.Image,
     layers: list[tuple[str, str, Image.Image]],
     seam_policy: dict | None,
+    *,
+    reference_image: Image.Image | None = None,
+    reference_valid_mask: Image.Image | None = None,
 ) -> tuple[Image.Image, dict]:
     """Repair shared boundaries and return ``(image, deterministic report)``."""
     policy = normalize_seam_policy(seam_policy, mode="semantic_merge")
@@ -330,15 +496,40 @@ def repair_semantic_merge(
         "tone_blended_pixels": 0,
         "alpha_blended_pixels": 0,
         "fringe_pixels": 0,
+        "inset_candidate_pixels": 0,
+        "inset_removed_pixels": 0,
+        "reference_restored_pixels": 0,
     }
     repaired = composite.convert("RGBA")
     if policy["cleanup"] == "off" or len(layers) < 2:
         return repaired, report
 
-    repaired, fringe_mask = _defringe_composite(layers, repaired)
-    report["fringe_pixels"] = _count(fringe_mask)
+    if reference_image is not None and reference_valid_mask is not None and policy["remove_internal_lines"]:
+        if reference_image.size != composite.size or reference_valid_mask.size != composite.size:
+            raise ValueError("seam reference must match the bake canvas")
+        contact, join, _ = _contact_and_join_masks(layers, policy["contact_band_px"])
+        report["contact_pixels"] = _count(contact)
+        report["join_pixels"] = _count(join)
+        # Restore only the shared internal boundary, never the whole source.
+        # A six-pixel band covers the generated outline and its soft shadow.
+        # Opaque coverage prevents background RGB entering the silhouette.
+        band = _dilate(join.point(lambda v: 255 if v else 0), 6)
+        band = ImageChops.multiply(band, contact.point(lambda v: 255 if v else 0))
+        valid = ImageChops.multiply(reference_valid_mask, repaired.getchannel("A").point(lambda v: 255 if v == 255 else 0))
+        if policy["tone_blend_width"]:
+            band = band.filter(ImageFilter.BoxBlur(policy["tone_blend_width"]))
+        band = ImageChops.multiply(band, valid)
+        repaired = _replace_rgb(repaired, reference_image, band)
+        report["reference_restored_pixels"] = _count(band)
+        report["internal_lines_removed"] = report["reference_restored_pixels"] > 0
+        return repaired, report
+
+    if policy["remove_internal_lines"]:
+        repaired, fringe_mask = _defringe_composite(layers, repaired)
+        report["fringe_pixels"] = _count(fringe_mask)
 
     contact, join, per_source_join = _contact_and_join_masks(layers, policy["contact_band_px"])
+    protected = _interior_contour_protection(layers, contact)
     report["contact_pixels"] = _count(contact)
     report["join_pixels"] = _count(join)
     owners = _resolve_owners(layers, contact, policy.get("ownership_rule"))
@@ -403,6 +594,19 @@ def repair_semantic_merge(
             report["removed_edge_pixels"] += _count(mask)
         report["internal_lines_removed"] = report["removed_edge_pixels"] > 0
 
+    # An opaque contour can sit several pixels inside a source's alpha edge.
+    # This is intentionally after shared-edge ownership cleanup and before
+    # tone/alpha blending: replacement needs the original source interior,
+    # while later narrow-band blending can soften only the repaired join.
+    if policy["remove_internal_lines"]:
+        repaired, candidate_pixels, removed_pixels = _cleanup_opaque_inset_join_lines(
+            repaired, layers, policy.get("ownership_rule")
+        )
+        report["inset_candidate_pixels"] = candidate_pixels
+        report["inset_removed_pixels"] = removed_pixels
+        if removed_pixels:
+            report["internal_lines_removed"] = True
+
     # Narrow-band tone/alpha blend. It is masked to the shared join edge and
     # is never a whole-image smoothing pass.
     blend_band = ImageChops.multiply(_dilate(join, policy["tone_blend_width"]), contact)
@@ -416,4 +620,7 @@ def repair_semantic_merge(
         softened_alpha = alpha.filter(ImageFilter.BoxBlur(policy["alpha_blend_width"]))
         repaired.putalpha(Image.composite(softened_alpha, alpha, blend_band))
         report["alpha_blended_pixels"] = _count(blend_band)
+    # Guard all repair passes, including defringing and final tone blending.
+    # Restoring the original composite also preserves the actual draw order.
+    repaired = Image.composite(composite.convert("RGBA"), repaired, protected)
     return repaired, report

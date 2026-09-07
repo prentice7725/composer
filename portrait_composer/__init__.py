@@ -44,6 +44,9 @@ from .instances import LayerInstance, Transform
 from .profiles import FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile, apply_candidate
 from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, add_attachment, set_deformation_scope
 from .secondary_regions import (
+    GEOMETRY_ROLES,
+    LOCK_INTENTS,
+    LOCK_NAMES,
     PREFLIGHT_DEGRADED,
     PREFLIGHT_DISABLED,
     PREFLIGHT_READY,
@@ -91,6 +94,9 @@ __all__ = [
     "set_deformation_scope",
     "add_attachment",
     "UPPER_TORSO_SECONDARY",
+    "GEOMETRY_ROLES",
+    "LOCK_NAMES",
+    "LOCK_INTENTS",
     "add_upper_torso_secondary",
     "visual_preflight",
     "PREFLIGHT_READY",

@@ -45,7 +45,8 @@ from .assets import AssetDefinition
 from .instances import LayerInstance, Transform
 from .render import render_subset, render_subset_layers
 from .rig_intent import is_rig_protected_semantic
-from .seam_repair import normalize_seam_policy, repair_semantic_merge, resolve_bake_mode
+from .seam_repair import normalize_seam_policy, resolve_bake_mode
+from .seam_reference import repair_bake_seams
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -54,7 +55,7 @@ CAN_BAKE = "CAN_BAKE"
 WARN = "WARN"
 BLOCK = "BLOCK"
 
-BAKE_VERSION = "1.0"
+BAKE_VERSION = "1.1"
 
 
 class BakeError(Exception):
@@ -289,6 +290,8 @@ def apply_bake_plan(
         "contact_pixels": 0,
         "expanded_pixels": 0,
         "internal_lines_removed": False,
+        "inset_candidate_pixels": 0,
+        "inset_removed_pixels": 0,
     }
     if resolved_mode == "semantic_merge":
         rendered_layers = render_subset_layers(
@@ -305,7 +308,10 @@ def apply_bake_plan(
             )
             for instance_id, image in rendered_layers
         ]
-        composite, seam_report = repair_semantic_merge(composite, semantic_layers, normalized_policy)
+        composite, seam_report = repair_bake_seams(
+            document, image_sources, composite, semantic_layers, normalized_policy,
+            transform_overrides=transform_overrides,
+        )
     staging = None
     if ordered_instance_ids is not None or transform_overrides is not None:
         staging = {

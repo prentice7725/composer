@@ -15,6 +15,7 @@ from portrait_composer.expressions import apply_expression_preset, create_expres
 from portrait_composer.instances import LayerInstance
 from portrait_composer.rig_intent import add_attachment, set_deformation_scope
 from portrait_composer.secondary_regions import (
+    LOCK_INTENTS,
     PREFLIGHT_DISABLED,
     PREFLIGHT_READY,
     add_upper_torso_secondary,
@@ -49,6 +50,9 @@ def test_c4_rig_intent_and_upper_torso_preflight_round_trip(tmp_path: Path):
 
     region = document.rig_intent["regions"]["upper_torso_secondary"]
     assert region["geometry"]["kind"] == "two_lobe"
+    assert region["geometry_role"] == "mass_hint"
+    assert region["lock_intent"] == {"center": "none", "neckline": "auto", "shoulder": "auto"}
+    assert region["locks"] == {"center": 0.0, "neckline": 0.0, "shoulder": 0.0}
     assert region["response_profile"] == "firm_bounce"
     assert "stiffness" not in region and "damping" not in region
     assert visual_preflight(document).status == PREFLIGHT_READY
@@ -61,6 +65,15 @@ def test_c4_rig_intent_and_upper_torso_preflight_round_trip(tmp_path: Path):
     reloaded = read_assembly_bundle(out_dir)
     assert reloaded.to_dict() == document.to_dict()
     assert reloaded.rig_intent["attachments"]["head_follow"]["mode"] == "follow"
+
+    import jsonschema
+    schema = json.loads(Path("schemas/portrait-assembly-v0.2.schema.json").read_text())
+    payload = document.to_dict()
+    payload.pop("bake_plans", None)
+    payload.pop("remap_review", None)
+    for instance in payload.get("instances", {}).values():
+        instance.pop("visual_ops", None)
+    jsonschema.validate({"format": "portrait-assembly", "version": "0.2", **payload}, schema)
 
 
 def test_c4_preflight_disables_rigid_target_and_manual_geometry_edit(tmp_path: Path):
@@ -166,6 +179,42 @@ def test_c3_donor_import_provenance_matte_roi_and_expression(tmp_path: Path):
         instance.pop("visual_ops", None)
     manifest = {"format": "portrait-assembly", "version": "0.2", **payload}
     jsonschema.validate(manifest, schema)
+
+
+def test_c4_p3_explicit_lock_intent_is_distinct_from_defaults(tmp_path: Path):
+    document, _, _ = _portrait_doc(tmp_path)
+    with document.transaction():
+        region = add_upper_torso_secondary(
+            document,
+            target="topwear_with_arms",
+            locks={"center": 0.12},
+            lock_intent={"center": "explicit"},
+        )
+
+    assert region["locks"]["center"] == 0.12
+    assert region["lock_intent"] == {"center": "explicit", "neckline": "auto", "shoulder": "auto"}
+    assert set(region["lock_intent"].values()) <= set(LOCK_INTENTS)
+    assert document.validate().ok
+
+
+def test_c4_p3_legacy_region_without_metadata_remains_readable(tmp_path: Path):
+    document, _, _ = _portrait_doc(tmp_path)
+    with document.transaction():
+        document.rig_intent.setdefault("regions", {})["legacy"] = {
+            "target": "topwear_with_arms",
+            "geometry": {
+                "kind": "two_lobe",
+                "left": {"center": [0.39, 0.36], "radius": [0.24, 0.20]},
+                "right": {"center": [0.61, 0.36], "radius": [0.24, 0.20]},
+            },
+            "locks": {"center": 0.10, "neckline": 0.16, "shoulder": 0.08},
+            "exclusions": [],
+            "author_strength": 0.9,
+            "response_profile": "soft",
+            "enabled": True,
+        }
+    assert document.validate().ok
+    assert document.rig_intent["regions"]["legacy"]["locks"]["center"] == 0.10
 
 
 def test_expression_donor_auto_builds_grouped_eye_and_mouth_states(tmp_path: Path):

@@ -124,6 +124,17 @@ class CanvasView(QGraphicsView):
                 self._mask_brush["points"] = [point]
                 event.accept()
                 return
+        # BAKE owns its source selection and transient staging recipe.  A
+        # canvas click in this context must not fall through to the normal
+        # ASSEMBLE picker, otherwise an accidental click changes the inputs
+        # of Bake Selected (and can rebuild its candidate card).  Space-pan
+        # remains available because it is a view gesture, not selection.
+        if getattr(self.session, "active_context", "ASSEMBLE") == "BAKE":
+            if self._space_panning:
+                super().mousePressEvent(event)
+            else:
+                event.accept()
+            return
         if event.modifiers() & Qt.KeyboardModifier.AltModifier:
             candidates = []
             for candidate in self.scene().items(scene_pos):

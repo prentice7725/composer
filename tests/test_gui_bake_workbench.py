@@ -10,6 +10,8 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QListWidget
 
 from portrait_composer.assembly import identity_assembly
@@ -240,6 +242,27 @@ def test_bake_selected_analyzes_the_current_multi_selection(window):
     assert len(wb._cards) == 1
     assert wb._cards[0].candidate.label == "selected_layers"
     assert wb._cards[0].candidate.instance_ids == selected
+
+
+def test_bake_context_canvas_click_does_not_replace_bake_selection(window, qapp):
+    selected = list(window.document.instances)[:2]
+    window.selection_model.set_instances(selected)
+    window.show()
+    window.set_context("BAKE")
+    qapp.processEvents()
+    window.bake_workbench._analyze_selected()
+    assert window.bake_workbench._manual_candidate is not None
+
+    # Click a rendered layer as a user might while checking the Bake preview.
+    # BAKE must keep its source selection owned by the Tree/workbench.
+    clicked_item = next(iter(window.canvas.scene_model._hit_items.values()))
+    click_pos = window.canvas.mapFromScene(clicked_item.sceneBoundingRect().center())
+    QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.LeftButton, pos=click_pos)
+    qapp.processEvents()
+
+    assert window.selection_model.instance_ids == selected
+    assert window.bake_workbench._manual_candidate is not None
+    assert window.bake_workbench._manual_candidate.instance_ids == selected
 
 
 def test_bake_plan_ui_creates_and_analyzes_without_raster_output(window):

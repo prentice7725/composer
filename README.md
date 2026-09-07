@@ -43,6 +43,18 @@ portrait-composer remap OUT.assembly NEW.portrait
 reader's own notes at the top of
 [portrait_composer/bundle.py](portrait_composer/bundle.py).
 
+## Semantic Merge
+
+Semantic Merge with internal-line removal uses the source bundle's original
+image to restore shared topwear/handwear boundaries when both layers retain
+their original pixels, opacity and placement. This preserves real armpit
+creases while removing segmentation outlines. Areas covered by other original
+layers (such as hair) are excluded, and the merged alpha is preserved.
+Preview and bake share this path; provenance records the original's hash.
+Edited, repositioned, mixed-source or unavailable bundles use local seam
+repair instead. Flatten and disabled internal-line removal do not restore
+pixels from the original.
+
 ## Tests
 
 ```sh

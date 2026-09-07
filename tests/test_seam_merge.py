@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+import pytest
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bake import apply_bake_plan
@@ -215,6 +216,124 @@ def test_front_source_edge_fringe_over_back_source_interior_is_cleaned():
     assert after_dip > before_dip + 15  # repaired: substantially lighter, ink tint cleaned
 
 
+def test_opaque_inset_shoulder_line_is_replaced_without_editing_sources():
+    """Regression fixture for a dark contour 2px inside a garment join.
+
+    This is intentionally not an alpha fringe: the line is fully opaque and
+    sits inside the topwear alpha.  The handwear only overlaps the shoulder
+    side, so an unrelated strap on the opposite side remains outside the
+    candidate region.
+    """
+    size = (32, 24)
+    handwear = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(handwear).rectangle((2, 4, 12, 19), fill=(232, 194, 170, 255))
+
+    topwear = Image.new("RGBA", size, (0, 0, 0, 0))
+    topwear_px = topwear.load()
+    garment = (158, 116, 126, 255)
+    for y in range(3, 20):
+        for x in range(8, 24):
+            topwear_px[x, y] = garment
+    # Fully opaque inset contour, two pixels inside the left shoulder edge.
+    for y in range(6, 18):
+        topwear_px[10, y] = (42, 30, 36, 255)
+        topwear_px[11, y] = (55, 40, 45, 255)
+    # A real strap detail on the far side must remain unchanged.
+    for y in range(5, 13):
+        topwear_px[21, y] = (48, 38, 44, 255)
+
+    composite = Image.new("RGBA", size, (0, 0, 0, 0))
+    composite.alpha_composite(handwear)
+    composite.alpha_composite(topwear)
+    policy = normalize_seam_policy(None, result_semantic="topwear_with_arms")
+    before_line = [composite.getpixel((10, y))[:3] for y in range(6, 18)]
+    before_strap = [composite.getpixel((21, y))[:4] for y in range(5, 13)]
+    source_hash = hashlib.sha256(topwear.tobytes()).hexdigest()
+
+    repaired, report = repair_semantic_merge(
+        composite,
+        [("handwear", "handwear", handwear), ("topwear", "topwear", topwear)],
+        policy,
+    )
+
+    after_line = [repaired.getpixel((10, y))[:3] for y in range(6, 18)]
+    after_strap = [repaired.getpixel((21, y))[:4] for y in range(5, 13)]
+    assert report["inset_candidate_pixels"] > 0
+    assert report["inset_removed_pixels"] > 0
+    assert sum(sum(pixel) for pixel in after_line) > sum(sum(pixel) for pixel in before_line)
+    assert after_strap == before_strap
+    assert hashlib.sha256(topwear.tobytes()).hexdigest() == source_hash
+
+
+def test_opaque_inset_cleanup_is_disabled_with_remove_internal_lines_false():
+    size = (32, 24)
+    handwear = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(handwear).rectangle((2, 4, 12, 19), fill=(232, 194, 170, 255))
+    topwear = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(topwear).rectangle((8, 3, 24, 20), fill=(158, 116, 126, 255))
+    topwear_px = topwear.load()
+    for y in range(6, 18):
+        topwear_px[10, y] = (42, 30, 36, 255)
+        topwear_px[11, y] = (55, 40, 45, 255)
+    composite = Image.new("RGBA", size, (0, 0, 0, 0))
+    composite.alpha_composite(handwear)
+    composite.alpha_composite(topwear)
+    policy = normalize_seam_policy(
+        {"cleanup": "auto", "remove_internal_lines": False},
+        result_semantic="topwear_with_arms",
+        mode="semantic_merge",
+    )
+
+    repaired, report = repair_semantic_merge(
+        composite,
+        [("handwear", "handwear", handwear), ("topwear", "topwear", topwear)],
+        policy,
+    )
+    assert report["inset_candidate_pixels"] == 0
+    assert report["inset_removed_pixels"] == 0
+    assert repaired.getpixel((10, 10)) == composite.getpixel((10, 10))
+
+
+@pytest.mark.parametrize("front_topwear", [True, False])
+@pytest.mark.parametrize("remove_lines", [True, False])
+def test_light_shoulder_contour_respects_stacking_and_cleanup(front_topwear, remove_lines):
+    # Skin-colored topwear may carry a brown shoulder contour much brighter
+    # than black ink. It still becomes an unwanted internal line over an arm.
+    size = (48, 40)
+    skin = (240, 200, 180, 255)
+    line = (166, 132, 115, 255)
+    back = Image.new("RGBA", size)
+    ImageDraw.Draw(back).rectangle((2, 4, 20, 35), fill=skin)
+    front = Image.new("RGBA", size)
+    draw = ImageDraw.Draw(front)
+    draw.rectangle((12, 4, 43, 35), fill=skin)
+    draw.line((14, 10, 14, 29), fill=line, width=2)
+    # A matching contour at the exposed outer edge and an interior strap
+    # away from the alpha boundary must not be mistaken for the overlap seam.
+    draw.line((41, 10, 41, 29), fill=line)
+    draw.line((25, 10, 25, 29), fill=line)
+    layers = [("arm", "handwear", back), ("shirt", "topwear", front)]
+    if not front_topwear:
+        layers.reverse()
+    composite = Image.new("RGBA", size)
+    for _, _, source in layers:
+        composite.alpha_composite(source)
+    originals = [source.tobytes() for _, _, source in layers]
+    repaired, report = repair_semantic_merge(
+        composite, layers,
+        _policy(remove_internal_lines=remove_lines, tone_blend_width=0, alpha_blend_width=0),
+    )
+    if front_topwear and remove_lines:
+        assert repaired.getpixel((14, 20)) == skin
+        assert repaired.getpixel((15, 20)) == skin
+        assert report["inset_removed_pixels"] > 0
+    else:
+        assert repaired.getpixel((15, 20)) == composite.getpixel((15, 20))
+    assert repaired.getpixel((41, 20)) == line
+    assert repaired.getpixel((25, 20)) == line
+    assert [source.tobytes() for _, _, source in layers] == originals
+
+
 def test_semantic_merge_repairs_contact_and_preserves_sources(tmp_path: Path):
     document, image_sources, hashes = _doc(tmp_path)
     derived_id, _ = apply_bake_plan(
@@ -237,6 +356,48 @@ def test_semantic_merge_repairs_contact_and_preserves_sources(tmp_path: Path):
     assert provenance["seam_report"]["internal_lines_removed"] is True
     assert derived_id in image_sources
     assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest for path, digest in hashes.items())
+
+
+@pytest.mark.parametrize("cleanup", ["auto", "aggressive"])
+@pytest.mark.parametrize("detail_semantic", ["topwear", "handwear"])
+def test_join_preserves_contour_continuing_into_source_interior(cleanup, detail_semantic):
+    size = (64, 56)
+    skin = (240, 200, 180, 255)
+    ink = (130, 95, 80, 255)
+    back = Image.new("RGBA", size)
+    ImageDraw.Draw(back).rectangle((2, 2, 60, 52), fill=skin)
+    front = Image.new("RGBA", size)
+    draw = ImageDraw.Draw(front)
+    draw.rectangle((12, 4, 54, 50), fill=skin)
+    # An anatomical crease runs from deep inside the skin into the join.
+    draw.line([(23, 12), (20, 20), (14, 28), (12, 33)], fill=ink, width=2)
+    # Separate seam: confined to the inset band, safe to remove.
+    draw.line((14, 39, 14, 45), fill=ink)
+    composite = Image.alpha_composite(back, front)
+    repaired, _ = repair_semantic_merge(
+        composite,
+        [("back", "handwear", back), ("front", detail_semantic, front)],
+        _policy(cleanup=cleanup),
+    )
+    assert repaired.crop((11, 24, 18, 35)).tobytes() == composite.crop((11, 24, 18, 35)).tobytes()
+    if detail_semantic == "topwear":
+        assert repaired.getpixel((14, 42))[0] > composite.getpixel((14, 42))[0] + 40
+
+
+def test_disabling_internal_lines_also_disables_fringe_repainting():
+    size = (32, 24)
+    back = Image.new("RGBA", size, (240, 200, 180, 255))
+    front = Image.new("RGBA", size)
+    draw = ImageDraw.Draw(front)
+    draw.rectangle((10, 0, 31, 23), fill=(240, 200, 180, 255))
+    draw.line((10, 0, 10, 23), fill=(70, 40, 30, 100))
+    composite = Image.alpha_composite(back, front)
+    repaired, report = repair_semantic_merge(
+        composite, [("arm", "handwear", back), ("shirt", "topwear", front)],
+        _policy(remove_internal_lines=False, expand_under=0, tone_blend_width=0, alpha_blend_width=0),
+    )
+    assert repaired.tobytes() == composite.tobytes()
+    assert report["fringe_pixels"] == 0
 
 
 def test_semantic_merge_policy_changes_output_and_round_trips(tmp_path: Path):

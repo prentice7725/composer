@@ -162,6 +162,16 @@
             "lower_falloff": { "type": "number", "minimum": 0, "maximum": 1 }
           }
         },
+        "lock_intent": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "center": { "type": "string", "enum": ["none", "auto", "explicit"] },
+            "neckline": { "type": "string", "enum": ["none", "auto", "explicit"] },
+            "shoulder": { "type": "string", "enum": ["none", "auto", "explicit"] }
+          }
+        },
+        "geometry_role": { "type": "string", "enum": ["mass_hint"] },
         "exclusions": { "type": "array" },
         "author_strength": { "type": "number", "minimum": 0, "maximum": 1 },
         "response_profile": { "type": "string", "enum": ["soft", "firm_bounce", "springy"] },

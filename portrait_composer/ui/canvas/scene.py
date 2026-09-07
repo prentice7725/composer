@@ -13,7 +13,8 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectI
 from ...instances import Transform
 from ...render import _positioned, render_reference, render_subset, render_subset_layers
 from ...preview import PreviewState
-from ...seam_repair import normalize_seam_policy, repair_semantic_merge, resolve_bake_mode
+from ...seam_repair import normalize_seam_policy, resolve_bake_mode
+from ...seam_reference import repair_bake_seams
 from .donor_align import DonorAlignController
 from .gizmos import TransformGizmo
 from .region_edit import RegionEditController
@@ -456,10 +457,13 @@ class CanvasScene(QGraphicsScene):
                     )
                     for instance_id, image in rendered_layers
                 ]
-                derived, _ = repair_semantic_merge(
+                derived, _ = repair_bake_seams(
+                    document,
+                    sources,
                     derived,
                     semantic_layers,
                     normalize_seam_policy(seam_policy, mode="semantic_merge"),
+                    transform_overrides=transform_overrides,
                 )
 
             preview = Image.new("RGBA", (width, height), (0, 0, 0, 0))

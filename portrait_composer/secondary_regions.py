@@ -1,7 +1,8 @@
-"""Authorable secondary-motion regions (C4).
+"""Authorable secondary-motion regions (C4/C4.1).
 
-This module stores region geometry and qualitative response intent.  Numeric
-stiffness/damping and all deformation safety remain AutoRig responsibilities.
+This module stores qualitative mass-location hints and response intent.
+``two_lobe`` is not a deformation boundary; cage construction, numeric
+stiffness/damping, and all deformation safety remain AutoRig responsibilities.
 """
 from __future__ import annotations
 
@@ -15,6 +16,11 @@ if TYPE_CHECKING:
 UPPER_TORSO_SECONDARY = "upper_torso_secondary"
 RESPONSE_PROFILES = ("soft", "firm_bounce", "springy")
 GEOMETRY_KINDS = ("two_lobe",)
+GEOMETRY_ROLES = ("mass_hint",)
+LOCK_NAMES = ("center", "neckline", "shoulder")
+LOCK_INTENTS = ("none", "auto", "explicit")
+_DEFAULT_LOCKS = {"center": 0.0, "neckline": 0.0, "shoulder": 0.0}
+_DEFAULT_LOCK_INTENTS = {"center": "none", "neckline": "auto", "shoulder": "auto"}
 PREFLIGHT_READY = "READY"
 PREFLIGHT_DEGRADED = "DEGRADED"
 PREFLIGHT_DISABLED = "DISABLED"
@@ -68,12 +74,40 @@ def _normalise_geometry(geometry: dict | None) -> dict:
 
 
 def _normalise_locks(locks: dict | None) -> dict:
-    result = {"center": 0.10, "neckline": 0.16, "shoulder": 0.08}
-    if locks:
+    # A numeric lock is an authored constraint, not a safe default.  New
+    # regions therefore start unconstrained; AutoRig owns any automatic
+    # neckline/shoulder safety behavior downstream.
+    result = dict(_DEFAULT_LOCKS)
+    if locks is not None:
+        if not isinstance(locks, dict):
+            raise SecondaryRegionError("locks must be an object")
         result.update(locks)
     for key, value in result.items():
         if not isinstance(value, (int, float)) or not isfinite(value) or not 0 <= value <= 1:
             raise SecondaryRegionError(f"lock {key!r} must be a number in [0, 1]")
+    return result
+
+
+def _normalise_lock_intent(lock_intent: dict | None, locks: dict | None) -> dict:
+    result = dict(_DEFAULT_LOCK_INTENTS)
+    if lock_intent is not None:
+        if not isinstance(lock_intent, dict):
+            raise SecondaryRegionError("lock_intent must be an object")
+        unknown = set(lock_intent) - set(LOCK_NAMES)
+        if unknown:
+            raise SecondaryRegionError(f"unknown lock_intent name(s): {sorted(unknown)!r}")
+        result.update(lock_intent)
+    elif locks is not None:
+        # Calling the authoring API with a numeric lock is an explicit
+        # authoring action.  Omitted fields retain the semantic defaults.
+        for name in locks:
+            if name in result:
+                result[name] = "explicit"
+    for name, intent in result.items():
+        if intent not in LOCK_INTENTS:
+            raise SecondaryRegionError(
+                f"lock_intent {name!r} must be one of {LOCK_INTENTS!r}"
+            )
     return result
 
 
@@ -86,6 +120,8 @@ def make_region(
     author_strength: float = 0.9,
     response_profile: str = "soft",
     enabled: bool = True,
+    lock_intent: dict | None = None,
+    geometry_role: str = "mass_hint",
 ) -> dict:
     if not target:
         raise SecondaryRegionError("secondary region target must be non-empty")
@@ -93,10 +129,14 @@ def make_region(
         raise SecondaryRegionError(f"unknown response_profile {response_profile!r}; expected {RESPONSE_PROFILES!r}")
     if not isinstance(author_strength, (int, float)) or not isfinite(author_strength) or not 0 <= author_strength <= 1:
         raise SecondaryRegionError("author_strength must be a number in [0, 1]")
+    if geometry_role not in GEOMETRY_ROLES:
+        raise SecondaryRegionError(f"unknown geometry_role {geometry_role!r}; expected {GEOMETRY_ROLES!r}")
     return {
         "target": target,
         "geometry": _normalise_geometry(geometry),
         "locks": _normalise_locks(locks),
+        "lock_intent": _normalise_lock_intent(lock_intent, locks),
+        "geometry_role": geometry_role,
         "exclusions": list(exclusions or []),
         "author_strength": float(author_strength),
         "response_profile": response_profile,
@@ -115,6 +155,8 @@ def add_region(
     author_strength: float = 0.9,
     response_profile: str = "soft",
     enabled: bool = True,
+    lock_intent: dict | None = None,
+    geometry_role: str = "mass_hint",
 ) -> dict:
     """Add an authored region to ``document.rig_intent``."""
     if not region_id:
@@ -122,6 +164,7 @@ def add_region(
     region = make_region(
         target=target, geometry=geometry, locks=locks, exclusions=exclusions,
         author_strength=author_strength, response_profile=response_profile, enabled=enabled,
+        lock_intent=lock_intent, geometry_role=geometry_role,
     )
     def mutate():
         intent = document.rig_intent
@@ -143,12 +186,14 @@ def add_upper_torso_secondary(
     geometry: dict | None = None,
     locks: dict | None = None,
     exclusions: list | None = None,
+    lock_intent: dict | None = None,
+    geometry_role: str = "mass_hint",
 ) -> dict:
-    """Add the canonical region with deterministic ``two_lobe`` geometry."""
+    """Add the canonical ``two_lobe`` mass hint with qualitative intent."""
     return add_region(
         document, region_id, target=target, geometry=geometry, locks=locks,
         exclusions=exclusions, author_strength=author_strength,
-        response_profile=response_profile,
+        response_profile=response_profile, lock_intent=lock_intent, geometry_role=geometry_role,
     )
 
 
@@ -163,10 +208,14 @@ def update_region(document: "AssemblyDocument", region_id: str, **changes: Any) 
             target=current["target"], geometry=current.get("geometry"), locks=current.get("locks"),
             exclusions=current.get("exclusions"), author_strength=current.get("author_strength", 0.9),
             response_profile=current.get("response_profile", "soft"), enabled=current.get("enabled", True),
+            lock_intent=current.get("lock_intent"), geometry_role=current.get("geometry_role", "mass_hint"),
         )
         # Preserve optional authoring diagnostics/metadata such as explicit
         # neckline intrusion or overlay coverage when only geometry is edited.
-        known = {"target", "geometry", "locks", "exclusions", "author_strength", "response_profile", "enabled"}
+        known = {
+            "target", "geometry", "locks", "lock_intent", "geometry_role", "exclusions",
+            "author_strength", "response_profile", "enabled",
+        }
         updated = {**{k: v for k, v in current.items() if k not in known}, **updated}
         regions[region_id] = updated
         return updated
@@ -257,6 +306,20 @@ def visual_preflight(document: "AssemblyDocument", region_id: str = UPPER_TORSO_
     checks["locks_valid"] = all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in locks.values())
     if not checks["locks_valid"]:
         reasons.append("one or more region locks are invalid")
+    lock_intent = region.get("lock_intent")
+    if lock_intent is not None:
+        checks["lock_intent_valid"] = (
+            isinstance(lock_intent, dict)
+            and set(lock_intent).issubset(LOCK_NAMES)
+            and all(value in LOCK_INTENTS for value in lock_intent.values())
+        )
+        if not checks["lock_intent_valid"]:
+            reasons.append("one or more lock intents are invalid")
+    geometry_role = region.get("geometry_role")
+    if geometry_role is not None:
+        checks["geometry_role_valid"] = geometry_role in GEOMETRY_ROLES
+        if not checks["geometry_role_valid"]:
+            reasons.append("secondary geometry role must be mass_hint")
 
     # Explicit authoring metadata is preferred.  The deterministic slot scan
     # is only a conservative warning signal, never a body-shape heuristic.
@@ -283,7 +346,13 @@ def visual_preflight(document: "AssemblyDocument", region_id: str = UPPER_TORSO_
 
     if not region.get("enabled", True) or not visible:
         status = PREFLIGHT_DISABLED
-    elif not checks.get("geometry_in_target") or not checks.get("locks_valid") or any("conflicts" in r for r in reasons):
+    elif (
+        not checks.get("geometry_in_target")
+        or not checks.get("locks_valid")
+        or checks.get("lock_intent_valid") is False
+        or checks.get("geometry_role_valid") is False
+        or any("conflicts" in r for r in reasons)
+    ):
         status = PREFLIGHT_DISABLED
     elif reasons:
         status = PREFLIGHT_DEGRADED

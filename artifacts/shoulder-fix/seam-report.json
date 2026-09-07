@@ -1,0 +1,21 @@
+{
+  "mode": "semantic_merge",
+  "cleanup": "auto",
+  "contact_pixels": 23534,
+  "join_pixels": 3611,
+  "ownership_pixels": 0,
+  "expanded_pixels": 0,
+  "internal_lines_removed": true,
+  "removed_edge_pixels": 0,
+  "tone_blended_pixels": 0,
+  "alpha_blended_pixels": 0,
+  "fringe_pixels": 0,
+  "inset_candidate_pixels": 0,
+  "inset_removed_pixels": 0,
+  "reference_restored_pixels": 13337,
+  "reference_source": {
+    "source_id": "d8dcc6ac69a876a482861bab7e4f3b20545c726f76a6569b247baf53d231e146",
+    "revision": "sha256:0a894c26f910ade0d401c735f004f0f5e241851c9ff1667a8e5e31569f936db2",
+    "original_hash": "sha256:7b7069af31999e0bdccdddd6928f0d1a2a5eb993293d3fb3c19b3ea585620283"
+  }
+}

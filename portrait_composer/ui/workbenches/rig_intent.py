@@ -4,7 +4,7 @@ Motion Permission and Attachment mode are plain-language authoring
 controls (directive #11: no mesh/weight/solver vocabulary in this UI,
 only tooltips describing what each scope/mode *means*). The
 upper_torso_secondary region's qualitative Response/Strength/Locks are
-edited here; its two_lobe *geometry* is edited directly on Canvas via
+edited here; its two_lobe *mass hint geometry* is edited directly on Canvas via
 CanvasScene.region_edit (canvas/region_edit.py) -- this panel only shows
 the region's Preflight status faithfully from core.
 
@@ -31,7 +31,16 @@ from PySide6.QtWidgets import (
 )
 
 from ...rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES
-from ...secondary_regions import PREFLIGHT_DEGRADED, PREFLIGHT_DISABLED, PREFLIGHT_READY, RESPONSE_PROFILES, UPPER_TORSO_SECONDARY, visual_preflight
+from ...secondary_regions import (
+    LOCK_INTENTS,
+    LOCK_NAMES,
+    PREFLIGHT_DEGRADED,
+    PREFLIGHT_DISABLED,
+    PREFLIGHT_READY,
+    RESPONSE_PROFILES,
+    UPPER_TORSO_SECONDARY,
+    visual_preflight,
+)
 
 SCOPE_TOOLTIPS = {
     "baked": "Rendered into a static baked layer; cannot move independently at runtime.",
@@ -247,10 +256,20 @@ class RigIntentWorkbench(QWidget):
         self.strength_spin = self._unit_spin(self._strength_changed)
         region_form.addRow("Strength", self.strength_spin)
         self.lock_spins: dict[str, QDoubleSpinBox] = {}
-        for lock_name in ("center", "neckline", "shoulder"):
+        self.lock_intent_selectors: dict[str, QComboBox] = {}
+        for lock_name in LOCK_NAMES:
             spin = self._unit_spin(lambda value, name=lock_name: self._lock_changed(name, value))
             self.lock_spins[lock_name] = spin
             region_form.addRow(f"{lock_name.title()} lock", spin)
+            intent_selector = QComboBox()
+            intent_selector.setAccessibleName(f"{lock_name.title()} lock intent")
+            for intent in LOCK_INTENTS:
+                intent_selector.addItem(intent.title(), intent)
+            intent_selector.currentIndexChanged.connect(
+                lambda _index, name=lock_name: self._lock_intent_changed(name)
+            )
+            self.lock_intent_selectors[lock_name] = intent_selector
+            region_form.addRow(f"{lock_name.title()} lock intent", intent_selector)
         outer.addLayout(region_form)
         outer.addStretch(1)
 
@@ -332,7 +351,7 @@ class RigIntentWorkbench(QWidget):
         self._region_exists = region is not None
         self.add_region_button.setEnabled(document is not None and not self._region_exists and self._selected_instance() is not None)
         self.remove_region_button.setEnabled(self._region_exists)
-        for widget in (self.strength_spin, *self.lock_spins.values()):
+        for widget in (self.strength_spin, *self.lock_spins.values(), *self.lock_intent_selectors.values()):
             widget.setEnabled(self._region_exists)
         for button in self.response_group.buttons():
             button.setEnabled(self._region_exists)
@@ -354,6 +373,17 @@ class RigIntentWorkbench(QWidget):
             spin.blockSignals(True)
             spin.setValue(region.get("locks", {}).get(name, 0.0))
             spin.blockSignals(False)
+            selector = self.lock_intent_selectors[name]
+            intent = (region.get("lock_intent") or {}).get(name)
+            if intent is None:
+                # Legacy v0.2 regions have numeric locks but no intent map.
+                # Treat non-zero authored values as explicit while preserving
+                # the new semantic defaults for zero-valued fields.
+                value = region.get("locks", {}).get(name, 0.0)
+                intent = "explicit" if value > 0 else ("none" if name == "center" else "auto")
+            selector.blockSignals(True)
+            selector.setCurrentIndex(max(0, selector.findData(intent)))
+            selector.blockSignals(False)
         current_profile = region.get("response_profile")
         for button in self.response_group.buttons():
             button.blockSignals(True)
@@ -467,8 +497,29 @@ class RigIntentWorkbench(QWidget):
         region = (document.rig_intent or {}).get("regions", {}).get(UPPER_TORSO_SECONDARY) if document else None
         locks = dict(region.get("locks", {})) if region else {}
         locks[name] = value
+        lock_intent = dict(region.get("lock_intent", {})) if region else {}
+        lock_intent[name] = "explicit"
         self.main_window.run_command(
             lambda document, image_sources: update_secondary_region(
-                document, image_sources, UPPER_TORSO_SECONDARY, locks=locks
+                document, image_sources, UPPER_TORSO_SECONDARY, locks=locks, lock_intent=lock_intent
+            )
+        )
+
+    def _lock_intent_changed(self, name: str) -> None:
+        if not self._region_exists:
+            return
+        selector = self.lock_intent_selectors[name]
+        intent = selector.currentData()
+        if intent not in LOCK_INTENTS:
+            return
+        from ..commands import update_secondary_region
+
+        document = self.main_window.document
+        region = (document.rig_intent or {}).get("regions", {}).get(UPPER_TORSO_SECONDARY) if document else None
+        lock_intent = dict(region.get("lock_intent", {})) if region else {}
+        lock_intent[name] = intent
+        self.main_window.run_command(
+            lambda document, image_sources: update_secondary_region(
+                document, image_sources, UPPER_TORSO_SECONDARY, lock_intent=lock_intent
             )
         )

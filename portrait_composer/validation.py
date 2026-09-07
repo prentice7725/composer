@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from . import hierarchy as _hierarchy
 from .slots import is_known_slot
 from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, LOGICAL_SURFACES
-from .secondary_regions import GEOMETRY_KINDS, RESPONSE_PROFILES
+from .secondary_regions import GEOMETRY_KINDS, GEOMETRY_ROLES, LOCK_INTENTS, LOCK_NAMES, RESPONSE_PROFILES
 from .visual_ops import VisualOpError, validate_stack
 from .seam_repair import normalize_seam_policy, resolve_bake_mode
 
@@ -186,6 +186,29 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
         for lock_name, lock in region.get("locks", {}).items():
             if not isinstance(lock, (int, float)) or not 0 <= lock <= 1:
                 errors.append(f"rig_intent.regions[{region_id!r}]: lock {lock_name!r} must be in [0, 1]")
+        geometry_role = region.get("geometry_role")
+        if geometry_role is not None and geometry_role not in GEOMETRY_ROLES:
+            errors.append(
+                f"rig_intent.regions[{region_id!r}]: invalid geometry_role {geometry_role!r}; "
+                f"expected one of {GEOMETRY_ROLES!r}"
+            )
+        lock_intent = region.get("lock_intent")
+        if lock_intent is not None:
+            if not isinstance(lock_intent, dict):
+                errors.append(f"rig_intent.regions[{region_id!r}]: lock_intent must be an object")
+            else:
+                unknown_intents = set(lock_intent) - set(LOCK_NAMES)
+                if unknown_intents:
+                    errors.append(
+                        f"rig_intent.regions[{region_id!r}]: unknown lock_intent name(s) "
+                        f"{sorted(unknown_intents)!r}"
+                    )
+                for lock_name, intent in lock_intent.items():
+                    if intent not in LOCK_INTENTS:
+                        errors.append(
+                            f"rig_intent.regions[{region_id!r}]: invalid lock_intent "
+                            f"{lock_name!r}={intent!r}; expected one of {LOCK_INTENTS!r}"
+                        )
     for attach_id, attach in rig_intent.get("attachments", {}).items():
         for key in ("target", "child"):
             ref = attach.get(key)

@@ -254,6 +254,10 @@ Not done (out of locked C2 scope, left for later phases):
 - [x] rig intent (typed deformation_scope authoring + validation)
 - [x] attachment (weld/hinge/free/follow authoring + validation)
 - [x] upper_torso_secondary
+- [x] C4.1 P3 authoring semantics: new regions use `center:none` / zero
+      numeric locks by default, with explicit `lock_intent` metadata
+- [x] `two_lobe` is exported as a qualitative `mass_hint`; cage/deformer
+      construction and all runtime physics remain AutoRig responsibilities
 - [x] soft/firm_bounce/springy qualitative response profiles
 - [x] manual region geometry edit
 - [x] visual preflight (READY/DEGRADED/DISABLED)
@@ -383,6 +387,10 @@ C0-C5 contracts. The current slice closes the data/render/export foundation:
   replacement, narrow-band tone/alpha blend, named profiles, strict
   seam-policy persistence, and live GUI preview controls
   (`seam_repair.py`, `bake.py`).
+- [x] Opaque inset join-line refinement: conservative inward-band detection,
+  topwear-side interior replacement, seam report candidate/removed metrics,
+  and shoulder/strap regression fixtures (`seam_repair.py`,
+  `tests/test_seam_merge.py`).
 
 Still externally blocked by design: the sibling `autorigging` repository in
 this workspace has an Assembly v0.2 reader but no `portrait-rig-bundle` v0.3

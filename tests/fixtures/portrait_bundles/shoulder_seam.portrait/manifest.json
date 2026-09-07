@@ -1,0 +1,141 @@
+{
+  "format": "portrait-bundle",
+  "version": "1.0",
+  "canvas": {
+    "width": 435,
+    "height": 195,
+    "coordinate_system": "top-left-y-down",
+    "color_space": "srgb",
+    "alpha": "straight"
+  },
+  "semantics": {
+    "schema": "portrait-semantic-tags",
+    "version": "v3",
+    "z_order": [
+      "body_remainder",
+      "back hair",
+      "bottomwear",
+      "neck",
+      "topwear",
+      "handwear",
+      "head",
+      "ears",
+      "face",
+      "eyebrow",
+      "eyewhite",
+      "irides",
+      "eyelash",
+      "nose",
+      "mouth",
+      "front hair"
+    ],
+    "warnings": []
+  },
+  "original": "original.png",
+  "generation": {
+    "seed_mode": "deterministic_auto",
+    "attempt_index": 0,
+    "seed": 12345,
+    "canonical_regression_seed": 42,
+    "source_identity": "shoulder-seam-regression-e4d0befb"
+  },
+  "layers": {
+    "body_remainder": {
+      "path": "layers/body_remainder.png",
+      "source_tag": "body_remainder"
+    },
+    "back hair": {
+      "path": "layers/back hair.png",
+      "source_tag": "back hair"
+    },
+    "bottomwear": {
+      "path": "layers/bottomwear.png",
+      "source_tag": "bottomwear"
+    },
+    "neck": {
+      "path": "layers/neck.png",
+      "source_tag": "neck"
+    },
+    "topwear": {
+      "path": "layers/topwear.png",
+      "source_tag": "topwear"
+    },
+    "handwear": {
+      "path": "layers/handwear.png",
+      "source_tag": "handwear"
+    },
+    "head": {
+      "path": "layers/head.png",
+      "source_tag": "head"
+    },
+    "ears": {
+      "path": "layers/ears.png",
+      "source_tag": "ears"
+    },
+    "face": {
+      "path": "layers/face.png",
+      "source_tag": "face"
+    },
+    "eyebrow": {
+      "path": "layers/eyebrow.png",
+      "source_tag": "eyebrow"
+    },
+    "eyewhite": {
+      "path": "layers/eyewhite.png",
+      "source_tag": "eyewhite"
+    },
+    "irides": {
+      "path": "layers/irides.png",
+      "source_tag": "irides"
+    },
+    "eyelash": {
+      "path": "layers/eyelash.png",
+      "source_tag": "eyelash"
+    },
+    "nose": {
+      "path": "layers/nose.png",
+      "source_tag": "nose"
+    },
+    "mouth": {
+      "path": "layers/mouth.png",
+      "source_tag": "mouth"
+    },
+    "front hair": {
+      "path": "layers/front hair.png",
+      "source_tag": "front hair"
+    }
+  },
+  "raw_layers": {},
+  "layer_contract": {
+    "canonical_stage": "production_repaired",
+    "raw_layers_preserved": false,
+    "silhouette_guard": true,
+    "semantic_ownership": {
+      "version": "1.0",
+      "stage": "post_repair_pre_remainder",
+      "report": "diagnostics/semantic_ownership.json"
+    },
+    "fidelity_repair": {
+      "version": "1.0",
+      "order": [
+        "reclaim_occluded",
+        "fit_layer_tone",
+        "fit_edge_alpha",
+        "clean_garment_orphans",
+        "fit_edge_alpha_final",
+        "fit_mouth_contact",
+        "fit_seam_residual"
+      ],
+      "report": "diagnostics/fidelity.json"
+    }
+  },
+  "diagnostics": {},
+  "validation": {
+    "static_reconstruction": "pass",
+    "seams": "pass",
+    "local_fidelity": "pass"
+  },
+  "source": {
+    "filename": "input.png"
+  }
+}
