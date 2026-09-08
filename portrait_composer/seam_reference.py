@@ -74,10 +74,15 @@ def _load_reference(document, image_sources, layers, transform_overrides):
         return None
     earliest = min(order.index(tag) for tag in tags)
     excluded = Image.new("L", size, 0)
-    # Hair/face/etc. from the original must never be burned into this bake,
-    # even if those other instances are now hidden, moved or removed.
-    for tag in order[earliest + 1:]:
+    # Preserve the original occluder guard for layers above the selected pair,
+    # but also exclude the lower reconstruction fallback explicitly.  The
+    # latter is the important distinction: body_remainder is allowed to fill
+    # the static portrait, but its original skin pixels must never be copied
+    # into a swappable topwear/handwear bake seam.
+    for tag in order:
         if tag in tags:
+            continue
+        if tag != "body_remainder" and order.index(tag) <= earliest:
             continue
         with Image.open(_bundle_file(root, entries[tag]["path"])) as image:
             if image.size != size:

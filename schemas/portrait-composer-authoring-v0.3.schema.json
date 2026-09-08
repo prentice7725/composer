@@ -23,6 +23,7 @@
         "unresolved_assets": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "donor_slots": { "$ref": "#/$defs/donorSlots" },
     "visual_ops": {
       "type": "object",
       "additionalProperties": {
@@ -70,6 +71,48 @@
         "tone_blend_width": { "type": "integer", "minimum": 0, "maximum": 2 },
         "alpha_blend_width": { "type": "integer", "minimum": 0, "maximum": 2 },
         "ownership_rule": { "type": ["string", "null"] }
+      }
+    },
+    "donorSlotEntry": {
+      "type": "object",
+      "required": ["source_instance", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "source_instance": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["EMPTY", "SELECTED", "REVIEW", "READY", "WARNING"] },
+        "source_id": { "type": "string" },
+        "source_revision": { "type": "string" },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "donorSlots": {
+      "type": "object",
+      "required": ["donor_profile", "eyes", "mouth"],
+      "additionalProperties": false,
+      "properties": {
+        "donor_profile": { "const": "face_expression_core_v1" },
+        "eyes": {
+          "type": "object",
+          "required": ["open", "closed"],
+          "additionalProperties": false,
+          "properties": {
+            "open": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] },
+            "closed": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] }
+          }
+        },
+        "mouth": {
+          "type": "object",
+          "required": ["closed", "a", "i", "u", "e", "o"],
+          "additionalProperties": false,
+          "properties": {
+            "closed": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] },
+            "a": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] },
+            "i": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] },
+            "u": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] },
+            "e": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] },
+            "o": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/donorSlotEntry" }] }
+          }
+        }
       }
     }
   }

@@ -17,6 +17,7 @@ from .. import variants as _variants
 from ..assembly import apply_recipe, harvest_instance, set_draw_order
 from ..bake_plan import analyze_bake_plan, apply_bake_plan as apply_logical_bake_plan, create_bake_plan
 from ..donors import DonorImportResult, import_donor
+from ..donor_slots import clear_donor_slot, set_donor_slot
 from ..expressions import apply_expression_preset, create_expression_preset, update_expression_preset
 from ..profiles import apply_candidate as _apply_bake_candidate
 from ..visual_ops import add_visual_op, reset_visual_ops, update_visual_op
@@ -156,6 +157,117 @@ def set_instance_plane(document, image_sources, instance_id: str, plane: str | N
     """Commit an Inspector plane edit through the public C1 plane API."""
     with document.transaction():
         _slots.set_plane(document, instance_id, plane)
+
+
+def delete_instances(document, image_sources, instance_ids: list[str]) -> None:
+    """Delete selected layer instances as one undoable authoring edit.
+
+    Assets are retained while referenced by another instance.  Relationships
+    owned by the deleted instances are cleaned up so this operation cannot
+    leave dangling VariantSet, expression, hierarchy, RigIntent, or donor
+    slot references behind.
+    """
+    ids = list(dict.fromkeys(str(instance_id) for instance_id in instance_ids))
+    missing = [instance_id for instance_id in ids if instance_id not in document.instances]
+    if missing:
+        raise KeyError(f"no such layer instance(s): {missing!r}")
+    with document.transaction():
+        deleted = set(ids)
+        for vs_id, variant_set in list(document.variant_sets.items()):
+            members = [member for member in variant_set.get("members", []) if member not in deleted]
+            if not members:
+                document.variant_sets.pop(vs_id, None)
+                for preset in document.expressions.values():
+                    if isinstance(preset.get("variants"), dict):
+                        preset["variants"].pop(vs_id, None)
+                continue
+            variant_set["members"] = members
+            for field in ("default", "active"):
+                if variant_set.get(field) in deleted or variant_set.get(field) not in members:
+                    variant_set[field] = members[0]
+            if isinstance(variant_set.get("state_groups"), dict):
+                variant_set["state_groups"] = {
+                    state: [member for member in members_for_state if member not in deleted]
+                    for state, members_for_state in variant_set["state_groups"].items()
+                    if any(member not in deleted for member in members_for_state)
+                }
+            if isinstance(variant_set.get("state_labels"), dict):
+                variant_set["state_labels"] = {
+                    member: state for member, state in variant_set["state_labels"].items() if member not in deleted
+                }
+            for preset in document.expressions.values():
+                variants = preset.get("variants") if isinstance(preset, dict) else None
+                if isinstance(variants, dict) and variants.get(vs_id) in deleted:
+                    variants[vs_id] = variant_set["active"]
+
+        rig_intent = document.rig_intent or {}
+        scopes = rig_intent.get("deformation_scopes", {})
+        for target in ids:
+            scopes.pop(target, None)
+        attachments = rig_intent.get("attachments", {})
+        rig_intent["attachments"] = {
+            attachment_id: attachment
+            for attachment_id, attachment in attachments.items()
+            if attachment.get("child") not in deleted and attachment.get("target") not in deleted
+        }
+        regions = rig_intent.get("regions", {})
+        rig_intent["regions"] = {
+            region_id: region for region_id, region in regions.items() if region.get("target") not in deleted
+        }
+
+        hierarchy = document.hierarchy or {}
+        nodes = hierarchy.get("nodes", {})
+        removed_node_ids = {
+            node_id for node_id, node in nodes.items()
+            if node_id in deleted or node.get("ref") in deleted
+        }
+        for node_id in removed_node_ids:
+            nodes.pop(node_id, None)
+        if isinstance(hierarchy.get("children"), dict):
+            hierarchy["children"] = {
+                parent: [child for child in children if child not in removed_node_ids and child in nodes]
+                for parent, children in hierarchy["children"].items()
+                if parent not in removed_node_ids
+            }
+
+        for family in ("eyes", "mouth"):
+            for slot, entry in document.donor_slots.get(family, {}).items():
+                if entry and entry.get("source_instance") in deleted:
+                    document.donor_slots[family][slot] = None
+
+        asset_refs = {document.instances[instance_id].asset_ref for instance_id in ids}
+        for instance_id in ids:
+            document.remove_instance(instance_id)
+        still_used = {instance.asset_ref for instance in document.instances.values()}
+        for asset_id in asset_refs - still_used:
+            document.remove_asset(asset_id)
+        used_source_ids = {
+            asset.source_binding.source_id
+            for asset in document.assets.values()
+            if asset.source_binding is not None
+        }
+        # A deleted donor must be importable again even when the replacement
+        # image has the same filename.  Keep producer bundle sources, but
+        # discard orphaned Composer donor source records.
+        document.sources = {
+            source_id: source
+            for source_id, source in document.sources.items()
+            if source_id in used_source_ids
+            or not isinstance(source.metadata, dict)
+            or source.metadata.get("kind") != "donor"
+        }
+    # Keep the external image mapping intact.  It is not document state and
+    # retaining the paths is what lets Undo immediately re-render restored
+    # instances without requiring a bundle reload.
+
+
+def assign_donor_slot(document, image_sources, family: str, slot: str, instance_id: str, *, status: str = "READY") -> None:
+    """Assign an existing instance to the structured face-expression board."""
+    set_donor_slot(document, family, slot, instance_id, status=status)
+
+
+def clear_assigned_donor_slot(document, image_sources, family: str, slot: str) -> None:
+    clear_donor_slot(document, family, slot)
 
 
 def harvest_semantic(document, image_sources, bundle_pool: dict, target_tag: str, run_label: str) -> None:

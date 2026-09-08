@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -30,14 +32,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...donors import check_drift, expression_donor_kind
+from ...donors import check_drift, expression_donor_kind, expression_target_instance
+from ...donor_slots import EYE_SLOTS, MOUTH_SLOTS, donor_slot_status
+from ..commands import assign_donor_slot
 
 MODES = ("composite", "target_only", "donor_only", "flicker", "difference")
 
 
-def _target_info(main_window):
+def _target_info(main_window, instance_id: str | None = None):
     document = main_window.document
-    selected = main_window.selection_model.instance_ids
+    selected = [instance_id] if instance_id is not None else main_window.selection_model.instance_ids
     if document is None or len(selected) != 1:
         return None
     instance_id = selected[0]
@@ -67,12 +71,33 @@ def _target_info(main_window):
     }
 
 
+def _donor_target_info(main_window, semantic: str):
+    """Resolve donor alignment against a matching face layer.
+
+    For normal donors the current single selection remains the target.  For
+    eye/mouth donors, a body/clothing selection is ignored and the existing
+    eye/mouth stack supplies the transform, ROI, and anchor instead.
+    """
+    selected_info = _target_info(main_window)
+    kind = expression_donor_kind(semantic)
+    if kind is None:
+        return selected_info
+    document = main_window.document
+    if document is None:
+        return None
+    preferred_id = selected_info["instance_id"] if selected_info is not None else None
+    target_id = expression_target_instance(document, kind, preferred_instance_id=preferred_id)
+    return _target_info(main_window, target_id) if target_id is not None else None
+
+
 class DonorWorkbench(QWidget):
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
         self.main_window = main_window
         self._donor_path: Path | None = None
         self._donor_image: Image.Image | None = None
+        self._pending_slot: tuple[str, str] | None = None
+        self._slot_status_labels: dict[tuple[str, str], QLabel] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -85,6 +110,36 @@ class DonorWorkbench(QWidget):
         self.target_label = QLabel("Target: none selected")
         top.addWidget(self.target_label, 1)
         outer.addLayout(top)
+
+        slot_box = QGroupBox("Face Expression Core · face_expression_core_v1")
+        slot_layout = QGridLayout(slot_box)
+        slot_layout.addWidget(QLabel("Family"), 0, 0)
+        slot_layout.addWidget(QLabel("Slot"), 0, 1)
+        slot_layout.addWidget(QLabel("Status"), 0, 2)
+        slot_layout.addWidget(QLabel("Author"), 0, 3)
+        row = 1
+        for family, slots in (("eyes", EYE_SLOTS), ("mouth", MOUTH_SLOTS)):
+            for slot in slots:
+                slot_layout.addWidget(QLabel(family.title()), row, 0)
+                slot_layout.addWidget(QLabel(slot), row, 1)
+                status = QLabel("EMPTY")
+                status.setAccessibleName(f"{family} {slot} donor slot status")
+                self._slot_status_labels[(family, slot)] = status
+                slot_layout.addWidget(status, row, 2)
+                select_button = QPushButton("Use Selected")
+                select_button.setAccessibleName(f"Assign selected instance to {family} {slot} donor slot")
+                select_button.clicked.connect(lambda _checked=False, f=family, s=slot: self._assign_selected_slot(f, s))
+                slot_layout.addWidget(select_button, row, 3)
+                import_button = QPushButton("Import…")
+                import_button.setAccessibleName(f"Import donor for {family} {slot} donor slot")
+                import_button.clicked.connect(lambda _checked=False, f=family, s=slot: self._import_for_slot(f, s))
+                slot_layout.addWidget(import_button, row, 4)
+                row += 1
+        self.expression_preview_button = QPushButton("Preview Expression Set")
+        self.expression_preview_button.setAccessibleName("Preview face expression set")
+        self.expression_preview_button.clicked.connect(self._preview_expression_set)
+        slot_layout.addWidget(self.expression_preview_button, row, 3, 1, 2)
+        outer.addWidget(slot_box)
 
         form = QFormLayout()
         self.semantic_field = QLineEdit()
@@ -152,6 +207,7 @@ class DonorWorkbench(QWidget):
         self._metrics_timer = QTimer(self)
         self._metrics_timer.setInterval(120)
         self._metrics_timer.timeout.connect(self._refresh_metrics)
+        self.refresh()
 
     def _semantic_changed(self, semantic: str) -> None:
         if not self._import_mode_locked and expression_donor_kind(semantic):
@@ -164,7 +220,7 @@ class DonorWorkbench(QWidget):
             button.setEnabled(enabled)
 
     def refresh(self) -> None:
-        info = _target_info(self.main_window)
+        info = _donor_target_info(self.main_window, self.semantic_field.text())
         if info is None:
             self.target_label.setText("Target: select exactly one Tree layer")
         else:
@@ -172,6 +228,42 @@ class DonorWorkbench(QWidget):
             if not self.semantic_field.text():
                 self.semantic_field.setText(info["semantic"])
             self._semantic_changed(self.semantic_field.text())
+        document = self.main_window.document
+        for key, label in self._slot_status_labels.items():
+            label.setText(donor_slot_status(document, *key) if document is not None else "EMPTY")
+
+    def _assign_selected_slot(self, family: str, slot: str) -> None:
+        selected = list(self.main_window.selection_model.instance_ids)
+        if len(selected) != 1:
+            self.main_window.statusBar().showMessage("Select exactly one layer to assign to a donor slot.", 5000)
+            return
+        if self.main_window.run_command(
+            lambda document, image_sources: assign_donor_slot(
+                document, image_sources, family, slot, selected[0]
+            )
+        ):
+            self.refresh()
+
+    def _import_for_slot(self, family: str, slot: str) -> None:
+        self._pending_slot = (family, slot)
+        semantic = f"{family}_{slot}" if family == "eyes" else f"mouth_{slot}"
+        self.semantic_field.setText(semantic)
+        self.import_mode.setCurrentIndex(self.import_mode.findData("variant_member"))
+        self._pick_donor()
+
+    def _preview_expression_set(self) -> None:
+        document = self.main_window.document
+        if document is None:
+            return
+        assigned = sum(
+            bool(document.donor_slots.get(family, {}).get(slot))
+            for family, slots in (("eyes", EYE_SLOTS), ("mouth", MOUTH_SLOTS))
+            for slot in slots
+        )
+        self.main_window.statusBar().showMessage(
+            f"Expression set preview: {assigned} face-expression slot(s) assigned. Runtime binding remains AutoRig-owned.",
+            6000,
+        )
 
     # -- import / clear ---------------------------------------------------
     def _pick_donor(self) -> None:
@@ -189,7 +281,7 @@ class DonorWorkbench(QWidget):
         self._donor_path = Path(path)
         self._donor_image = image.convert("RGBA")
 
-        info = _target_info(self.main_window)
+        info = _donor_target_info(self.main_window, semantic)
         donor_w, donor_h = self._donor_image.size
         if info is not None and expression_donor_kind(self.semantic_field.text() or info["semantic"]):
             initial = dict(info["transform"])
@@ -324,5 +416,9 @@ class DonorWorkbench(QWidget):
             result = result_holder.get("result")
             self.clear_ghost()
             if result is not None:
+                # Canonical slot imports are registered by donors.import_donor
+                # inside the same transaction as the Asset/Instance/VariantSet
+                # commit, so Import remains one undo step.
+                self._pending_slot = None
                 self.main_window.selection_model.select(result.instance_id)
                 self.main_window.set_context("VARIANTS" if result.variant_set_id else "ASSEMBLE")

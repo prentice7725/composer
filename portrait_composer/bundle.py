@@ -57,6 +57,7 @@ so strict v0.2 consumers can continue to read manifest.json:
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -366,7 +367,9 @@ def write_assembly_bundle(
             instance_id: instance.pop("visual_ops", [])
             for instance_id, instance in manifest_document["instances"].items()
         },
+        "donor_slots": copy.deepcopy(document.donor_slots),
     }
+    manifest_document.pop("donor_slots", None)
     manifest = {"format": ASSEMBLY_FORMAT, "version": ASSEMBLY_VERSION}
     manifest.update(manifest_document)
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
@@ -408,6 +411,8 @@ def read_assembly_bundle(path: Path) -> AssemblyDocument:
             )
         manifest["bake_plans"] = authoring_state.get("bake_plans", {})
         manifest["remap_review"] = authoring_state.get("remap_review")
+        if "donor_slots" in authoring_state:
+            manifest["donor_slots"] = authoring_state.get("donor_slots")
         visual_ops = authoring_state.get("visual_ops", {})
         if not isinstance(visual_ops, dict):
             raise BundleError(f"authoring state visual_ops must be an object: {authoring_path}")

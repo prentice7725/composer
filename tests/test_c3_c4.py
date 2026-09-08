@@ -10,7 +10,7 @@ from portrait_composer.assets import AssetDefinition
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bake import CAN_BAKE, WARN, analyze_bake
 from portrait_composer.bundle import BundleError, read_assembly_bundle, read_portrait_bundle, write_assembly_bundle
-from portrait_composer.donors import DonorDriftError, import_donor
+from portrait_composer.donors import DonorDriftError, expression_target_instance, import_donor
 from portrait_composer.expressions import apply_expression_preset, create_expression_preset
 from portrait_composer.instances import LayerInstance
 from portrait_composer.rig_intent import add_attachment, set_deformation_scope
@@ -280,6 +280,24 @@ def test_expression_donor_auto_builds_grouped_eye_and_mouth_states(tmp_path: Pat
     assert "expression_talk_open" in document.expressions
     assert document.expressions["expression_talk_open"]["variants"] == {"mouth_state": talk_result.instance_id}
     assert document.validate().ok
+
+
+def test_expression_target_ignores_unrelated_body_selection(tmp_path: Path):
+    document, _, _ = _portrait_doc(tmp_path)
+    with document.transaction():
+        for semantic, draw_order, slot in (
+            ("eyewhite", 10, "eye"),
+            ("irides", 11, "eye"),
+            ("mouth", 20, "mouth"),
+        ):
+            asset_id = f"{semantic}__asset"
+            instance_id = f"{semantic}__instance"
+            document.add_asset(AssetDefinition(id=asset_id, semantic=semantic, planes=[semantic]))
+            document.add_instance(LayerInstance(id=instance_id, asset_ref=asset_id, slot=slot, draw_order=draw_order))
+            document.composition.setdefault("draw_order", []).append(instance_id)
+
+    assert expression_target_instance(document, "eyes", preferred_instance_id="topwear__instance") == "eyewhite__instance"
+    assert expression_target_instance(document, "mouth", preferred_instance_id="topwear__instance") == "mouth__instance"
 
 
 def test_donor_replacement_preserves_target_instance_identity_and_transform(tmp_path: Path):

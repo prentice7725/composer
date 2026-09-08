@@ -284,3 +284,27 @@ def test_bake_plan_ui_creates_and_analyzes_without_raster_output(window):
     wb._analyze_plan()
     assert window.document.bake_plans["ui_plan"]["status"] == "WARN"
     assert "analysis" in window.document.bake_plans["ui_plan"]
+
+
+def test_simple_torso_quick_bake_excludes_body_remainder(window):
+    window.selection_model.set_instances(list(window.document.instances))
+    window.set_context("BAKE")
+    wb = window.bake_workbench
+    wb.workflow_mode.setCurrentIndex(wb.workflow_mode.findData("simple"))
+    wb.simple_result_combo.setCurrentText("topwear_with_arms")
+    selected_labels = {
+        window.document.assets[window.document.instances[instance_id].asset_ref].semantic
+        for instance_id in wb._simple_sources()
+    }
+    assert selected_labels <= {"topwear", "handwear"}
+
+
+def test_delete_selected_layers_is_undoable(window):
+    instance_id = next(iter(window.document.instances))
+    window.selection_model.select(instance_id)
+    from portrait_composer.ui.commands import delete_instances
+
+    assert window.run_command(lambda doc, srcs: delete_instances(doc, srcs, [instance_id]))
+    assert instance_id not in window.document.instances
+    window.undo()
+    assert instance_id in window.document.instances

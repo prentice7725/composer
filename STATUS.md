@@ -9,6 +9,33 @@ The C4 → C2 integration is intentional: a clean PORTRAIT_RIG torso bake
 remains WARN until its logical surface has authored RigIntent; authoring
 `topwear_with_arms = secondary` makes it analyzable as CAN_BAKE.
 
+## C3.1 / C2.1 -- Donor slots and Quick Bake simplification
+
+The Composer frontend now exposes the deterministic
+`face_expression_core_v1` board: eye `open/closed` and mouth
+`closed/a/i/u/e/o` slots. Canonical expression donor imports register the
+selected instance, source revision, warnings, normalized face plane, and
+existing VariantSet membership in the same transaction. The board is
+Composer authoring metadata only; runtime parameters and expression binding
+remain AutoRig-owned. Assignments survive Assembly save/reload in
+`composer-authoring-v03.json` while the downstream Assembly v0.2 manifest
+stays strict.
+
+Bake Workbench now has an explicit Simple/Advanced switch. Simple exposes
+selected sources, deterministic result-semantic inference for common torso
+combinations, Auto/Strong/Off seam cleanup, the same Before/After preview
+renderer used by final bake, and Quick Bake. WARN continues with the warning
+carried into the result; BLOCK remains enforced by the existing bake core.
+Advanced retains the existing Bake Plan and staging controls.
+
+Layer cleanup is available from Edit → Delete Selected Layers and the Tree
+context menu. It removes selected instances in one transaction, cleans their
+authoring relationships, retains shared assets when still referenced, and
+keeps external image paths so Undo can restore the canvas immediately. The
+Simple `torso_plan`/`topwear_with_arms` route restricts sources to `topwear`
+and `handwear`; unrelated selected layers such as `body_remainder` are not
+included in that composite.
+
 ## C2 -- Bake + Export Profiles
 
 Bake and Profile remain library APIs (`portrait_composer.{bake,profiles}`);

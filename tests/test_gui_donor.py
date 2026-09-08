@@ -10,7 +10,7 @@ from PIL import Image
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle
 from portrait_composer.donors import DonorDriftError
-from portrait_composer.ui.commands import import_donor_asset
+from portrait_composer.ui.commands import delete_instances, import_donor_asset
 
 
 @pytest.fixture
@@ -117,3 +117,35 @@ def test_import_donor_asset_records_provenance(loaded, tmp_path: Path):
     records = document.provenance.for_target(result.instance_id)
     assert records and records[-1].operation == "donor_import"
     assert document.assets[result.asset_id].provenance["operation"] == "donor_import"
+
+
+def test_deleted_expression_donor_can_be_reimported_with_same_filename(loaded, tmp_path: Path):
+    document, image_sources = loaded
+    old_dir = tmp_path / "old"
+    replacement_dir = tmp_path / "replacement"
+    old_dir.mkdir()
+    replacement_dir.mkdir()
+    old_path = old_dir / "eye_closed.png"
+    replacement_path = replacement_dir / "eye_closed.png"
+    Image.new("RGBA", (20, 20), (20, 30, 40, 255)).save(old_path)
+    Image.new("RGBA", (20, 20), (80, 90, 100, 255)).save(replacement_path)
+
+    kwargs = {
+        "semantic": "eye_closed",
+        "donor_size": (20, 20),
+        "alignment": {"x": 0.0, "y": 0.0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0},
+        "target_roi": {"x": 0, "y": 0, "width": 20, "height": 20},
+        "target_size": (40, 40),
+        "target_rotation": 0.0,
+        "allow_drift": False,
+    }
+    first = import_donor_asset(document, image_sources, old_path, **kwargs)
+    assert first.source_id == "donor:eye_closed"
+    delete_instances(document, image_sources, [first.instance_id])
+    assert first.asset_id not in document.assets
+    assert first.source_id not in document.sources
+
+    second = import_donor_asset(document, image_sources, replacement_path, **kwargs)
+    assert second.instance_id in document.instances
+    assert second.source_id == "donor:eye_closed"
+    assert document.sources[second.source_id].path == str(replacement_path)

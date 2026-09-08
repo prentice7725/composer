@@ -262,6 +262,12 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(send_backward)
         edit_menu.addAction(bring_front)
         edit_menu.addAction(send_back)
+        edit_menu.addSeparator()
+        delete_selected = QAction("Delete Selected Layers", self)
+        delete_selected.setShortcut(QKeySequence.StandardKey.Delete)
+        delete_selected.setToolTip("Delete selected layers; undo is available")
+        delete_selected.triggered.connect(self._delete_selected_layers)
+        edit_menu.addAction(delete_selected)
 
         view_menu = self.menuBar().addMenu("View")
         fit = QAction("Fit Canvas", self)
@@ -928,6 +934,17 @@ class MainWindow(QMainWindow):
                 document, instance_id, direction=direction, to_extreme=to_extreme
             )
         )
+
+    def _delete_selected_layers(self) -> None:
+        selected = list(self.selection_model.instance_ids)
+        if not selected:
+            self.statusBar().showMessage("Select one or more layers to delete.", 4000)
+            return
+        from .commands import delete_instances
+
+        if self.run_command(lambda document, image_sources: delete_instances(document, image_sources, selected)):
+            self.selection_model.set_instances([])
+            self.statusBar().showMessage(f"Deleted {len(selected)} layer(s). Undo is available.", 5000)
 
     def _refresh_after_document_change(self) -> None:
         # Uses the same layers_dir/image_sources the document was displayed

@@ -31,6 +31,7 @@ from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, LOGICAL_SURFACES
 from .secondary_regions import GEOMETRY_KINDS, GEOMETRY_ROLES, LOCK_INTENTS, LOCK_NAMES, RESPONSE_PROFILES
 from .visual_ops import VisualOpError, validate_stack
 from .seam_repair import normalize_seam_policy, resolve_bake_mode
+from .donor_slots import validate_donor_slots
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -58,6 +59,8 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
 
     asset_ids = set(document.assets.keys())
     instance_ids = set(document.instances.keys())
+
+    errors.extend(validate_donor_slots(getattr(document, "donor_slots", None), instance_ids=instance_ids))
 
     # duplicate stable ID: an instance id must not collide with an asset id
     # (within each namespace, the backing dict already enforces uniqueness).

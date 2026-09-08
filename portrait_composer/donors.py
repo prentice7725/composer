@@ -20,6 +20,7 @@ from .instances import LayerInstance, Transform
 from .sources import SourceAsset, SourceBinding, content_hash
 from .slots import is_known_slot
 from .variants import add_member, add_variant_set, configure_state_groups
+from .donor_slots import register_expression_donor_slot, slot_for_donor_semantic
 
 if TYPE_CHECKING:
     from .document import AssemblyDocument
@@ -256,6 +257,9 @@ def _expression_state(semantic: str, kind: str) -> str:
     if kind == "eyes":
         return "closed" if normalized == "blink" or any(token in normalized for token in ("closed", "blink")) else "open"
     if kind == "mouth":
+        for vowel in ("a", "i", "u", "e", "o"):
+            if normalized in {f"mouth_{vowel}", f"viseme_{vowel}", f"phoneme_{vowel}"}:
+                return vowel
         return "open" if any(token in normalized for token in ("open", "talk")) else "closed"
     return "default"
 
@@ -340,6 +344,36 @@ def _expression_stack(document: "AssemblyDocument", kind: str, *, target_instanc
     return found
 
 
+def expression_target_instance(
+    document: "AssemblyDocument",
+    kind: str,
+    *,
+    preferred_instance_id: str | None = None,
+) -> str | None:
+    """Return a compatible facial reference for donor placement.
+
+    The selected Canvas layer is often a body or clothing layer.  Expression
+    donors must never inherit that layer's transform merely because it was
+    selected when the Donor workbench was opened.  Prefer a selected base
+    facial layer when it is compatible; otherwise use the first layer in the
+    existing face-expression stack (the stack is draw-order stable).
+    """
+    if kind not in {"eyes", "mouth"}:
+        return None
+    if preferred_instance_id in document.instances:
+        preferred = document.instances[preferred_instance_id]
+        asset = document.assets.get(preferred.asset_ref)
+        semantic = asset.semantic if asset is not None else ""
+        if expression_donor_kind(semantic) == kind:
+            return preferred_instance_id
+        if kind == "eyes" and preferred.slot == "eye" and semantic not in {"eye_closed", "eyes_closed", "blink"}:
+            return preferred_instance_id
+        if kind == "mouth" and preferred.slot == "mouth" and semantic not in {"mouth_open", "talk", "talk_open"}:
+            return preferred_instance_id
+    stack = _expression_stack(document, kind)
+    return stack[0] if stack else None
+
+
 def _auto_expression_preset(document: "AssemblyDocument", variant_set_id: str, instance_id: str, semantic: str) -> None:
     normalized = semantic.strip().lower().replace("-", "_").replace(" ", "_")
     preset_name = None
@@ -373,7 +407,9 @@ def _configure_expression_variant(
         if state == "closed":
             groups = {"open": stack, "closed": [donor_instance_id]}
         else:
-            groups = {"closed": stack, "open": [donor_instance_id]}
+            # Vowel visemes are named states, not a generic ``open`` state.
+            # Keep the existing mouth stack as the closed/default state.
+            groups = {"closed": stack, state: [donor_instance_id]}
         groups = {name: members for name, members in groups.items() if members}
         members = list(dict.fromkeys(member_id for member_ids in groups.values() for member_id in member_ids))
         # A newly imported mouth donor must not make the portrait speak by
@@ -403,7 +439,8 @@ def _configure_expression_variant(
         groups[state] = list(dict.fromkeys([*groups[state], donor_instance_id]))
         active = existing.get("active") if existing.get("active") in existing.get("members", []) else None
         default = existing.get("default") if existing.get("default") in existing.get("members", []) else None
-        default = default or next(iter(groups.get("open", [])), donor_instance_id)
+        preferred_default = "open" if kind == "eyes" else "closed"
+        default = default or next(iter(groups.get(preferred_default, [])), donor_instance_id)
         active = active or default
         configure_state_groups(document, variant_set_id, groups, default=default, active=active)
     vs = document.variant_sets[variant_set_id]
@@ -470,6 +507,23 @@ def import_donor(
     else:
         instance_id = instance_id or f"{asset_id}__instance"
     source_id = donor_id or f"donor:{donor_path.stem}"
+    if donor_id is None:
+        # File stems are convenient human-readable defaults but are not
+        # globally unique.  Re-importing a replacement with the same stem
+        # must not collide with an orphaned/older donor source record.
+        candidate = source_id
+        suffix = 2
+        while candidate in document.sources:
+            existing_path = document.sources[candidate].path
+            try:
+                same_path = existing_path is not None and Path(existing_path).resolve() == donor_path.resolve()
+            except (OSError, RuntimeError, TypeError):
+                same_path = str(existing_path) == str(donor_path)
+            if same_path:
+                break
+            candidate = f"{source_id}:{suffix}"
+            suffix += 1
+        source_id = candidate
     variant_set_id = variant_set_id or variant_set or _default_variant_set(semantic)
 
     target_instance = document.instances.get(target_instance_id) if target_instance_id else None
@@ -521,6 +575,7 @@ def import_donor(
         "import_mode": import_mode,
         "target_instance_id": target_instance_id,
         "variant_state": _expression_state(semantic, expression_kind) if expression_kind else None,
+        "donor_slot": list(slot_for_donor_semantic(semantic)) if slot_for_donor_semantic(semantic) else None,
         "authored_plane": authored_plane,
     }
     asset_provenance = {"operation": "donor_import", **provenance_detail}
@@ -601,6 +656,15 @@ def import_donor(
                 instance_id,
                 semantic,
             )
+            if expression_kind:
+                register_expression_donor_slot(
+                    document,
+                    semantic,
+                    instance_id,
+                    source_id=source_id,
+                    source_revision=source_revision,
+                    warnings=drift.reasons or None,
+                )
 
     if image_sources is not None:
         image_sources[instance_id] = image_path

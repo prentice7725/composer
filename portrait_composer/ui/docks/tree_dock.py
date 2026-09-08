@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..commands import nudge_draw_order, reorder_draw_order, set_instance_visible
+from ..commands import delete_instances, nudge_draw_order, reorder_draw_order, set_instance_visible
 from ..models.assembly_tree import AssemblyTreeFilter, AssemblyTreeModel, INSTANCE_ROLE, META_ROLE
 
 
@@ -215,6 +215,8 @@ class TreeDock(QDockWidget):
         menu.addSeparator()
         bring_front = menu.addAction("Bring to Front\tShift+]")
         send_back = menu.addAction("Send to Back\tShift+[")
+        menu.addSeparator()
+        delete_layers = menu.addAction("Delete Selected Layers")
         chosen = menu.exec(self.tree.viewport().mapToGlobal(point))
 
         def run(**kwargs):
@@ -228,3 +230,8 @@ class TreeDock(QDockWidget):
             run(to_extreme=1)
         elif chosen is send_back:
             run(to_extreme=-1)
+        elif chosen is delete_layers:
+            selected = list(self.selection_model.instance_ids)
+            if instance_id not in selected:
+                selected = [instance_id]
+            window.run_command(lambda document, image_sources: delete_instances(document, image_sources, selected))

@@ -41,7 +41,7 @@ from ...bake_plan import PLAN_STATUSES
 from ...instances import Transform
 from ...profiles import BakeCandidate, FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile
 from ...seam_repair import BAKE_MODES, BAKE_PROFILES, SEAM_CLEANUP_MODES, normalize_seam_policy, resolve_bake_mode
-from ..commands import analyze_logical_bake_plan, apply_logical_plan, create_logical_bake_plan
+from ..commands import analyze_logical_bake_plan, apply_logical_plan, bake_candidate, create_logical_bake_plan
 
 PROFILES = (PORTRAIT_STATIC, PORTRAIT_RIG, FULL_MOTION)
 VERDICT_TEXT = {CAN_BAKE: "CAN_BAKE ✓", WARN: "WARN !", BLOCK: "BLOCK ✗"}
@@ -80,6 +80,29 @@ def _unique_output_name(document, base: str) -> str:
     ):
         index += 1
     return f"{base}_{index}"
+
+
+def _infer_quick_result(document, instance_ids: list[str]) -> str | None:
+    """Infer only the small, deterministic v0.1 Quick Bake vocabulary."""
+    semantics = {_label_for(document, instance_id).lower() for instance_id in instance_ids}
+    if "topwear" in semantics and ("handwear" in semantics or "sleeve" in semantics or "arm" in semantics):
+        return "topwear_with_arms"
+    if "body_remainder" in semantics and any(
+        value in semantics for value in ("sleeve", "handwear", "arm", "body_sleeve")
+    ):
+        return "body_with_sleeves"
+    if any("coat" in value for value in semantics):
+        return "coat_full"
+    return None
+
+
+def _torso_plan_sources(document, instance_ids: list[str]) -> list[str]:
+    """The simple torso plan is deliberately only garment + handwear."""
+    allowed = {"topwear", "handwear"}
+    return [
+        instance_id for instance_id in instance_ids
+        if _label_for(document, instance_id).lower() in allowed
+    ]
 
 
 class _CandidateCard(QFrame):
@@ -498,6 +521,7 @@ class BakeWorkbench(QWidget):
         self.main_window = main_window
         self._cards: list[_CandidateCard] = []
         self._manual_candidate: BakeCandidate | None = None
+        self._workflow_mode = "advanced"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -526,9 +550,55 @@ class BakeWorkbench(QWidget):
         top.addWidget(self.bake_selected_button)
         outer.addLayout(top)
 
-        plan_box = QFrame()
-        plan_box.setFrameShape(QFrame.Shape.StyledPanel)
-        plan_layout = QHBoxLayout(plan_box)
+        workflow_row = QHBoxLayout()
+        workflow_row.addWidget(QLabel("Bake Workflow"))
+        self.workflow_mode = QComboBox()
+        self.workflow_mode.addItem("Simple", "simple")
+        self.workflow_mode.addItem("Advanced", "advanced")
+        self.workflow_mode.setCurrentIndex(self.workflow_mode.findData("advanced"))
+        self.workflow_mode.setAccessibleName("Bake workflow mode")
+        self.workflow_mode.currentIndexChanged.connect(self._workflow_mode_changed)
+        workflow_row.addWidget(self.workflow_mode)
+        workflow_row.addStretch(1)
+        outer.addLayout(workflow_row)
+
+        self.simple_board = QFrame()
+        self.simple_board.setFrameShape(QFrame.Shape.StyledPanel)
+        simple_layout = QHBoxLayout(self.simple_board)
+        simple_layout.addWidget(QLabel("Sources"))
+        self.simple_sources_label = QLabel("Select at least two layers")
+        self.simple_sources_label.setMinimumWidth(220)
+        simple_layout.addWidget(self.simple_sources_label)
+        simple_layout.addWidget(QLabel("Result"))
+        self.simple_result_combo = QComboBox()
+        self.simple_result_combo.setEditable(True)
+        self.simple_result_combo.addItem("Choose result semantic…", "")
+        for semantic in ("topwear_with_arms", "body_with_sleeves", "coat_full"):
+            self.simple_result_combo.addItem(semantic, semantic)
+        self.simple_result_combo.setAccessibleName("Quick bake result semantic")
+        simple_layout.addWidget(self.simple_result_combo)
+        simple_layout.addWidget(QLabel("Seam Cleanup"))
+        self.simple_cleanup_combo = QComboBox()
+        self.simple_cleanup_combo.addItem("Auto", "auto")
+        self.simple_cleanup_combo.addItem("Strong", "aggressive")
+        self.simple_cleanup_combo.addItem("Off", "off")
+        self.simple_cleanup_combo.setAccessibleName("Quick bake seam cleanup")
+        simple_layout.addWidget(self.simple_cleanup_combo)
+        self.simple_before_button = QPushButton("Before")
+        self.simple_after_button = QPushButton("After")
+        self.simple_before_button.clicked.connect(lambda: self._quick_preview("before"))
+        self.simple_after_button.clicked.connect(lambda: self._quick_preview("after"))
+        simple_layout.addWidget(self.simple_before_button)
+        simple_layout.addWidget(self.simple_after_button)
+        self.quick_bake_button = QPushButton("Quick Bake")
+        self.quick_bake_button.setAccessibleName("Quick bake selected layers")
+        self.quick_bake_button.clicked.connect(self._quick_bake)
+        simple_layout.addWidget(self.quick_bake_button)
+        outer.addWidget(self.simple_board)
+
+        self.plan_box = QFrame()
+        self.plan_box.setFrameShape(QFrame.Shape.StyledPanel)
+        plan_layout = QHBoxLayout(self.plan_box)
         plan_layout.addWidget(QLabel("Bake Plan"))
         self.plan_id_edit = QLineEdit("torso_plan")
         self.plan_id_edit.setAccessibleName("Bake plan id")
@@ -552,9 +622,10 @@ class BakeWorkbench(QWidget):
         self.apply_plan_button.setAccessibleName("Apply selected bake plan")
         self.apply_plan_button.clicked.connect(self._apply_plan)
         plan_layout.addWidget(self.apply_plan_button)
-        outer.addWidget(plan_box)
+        outer.addWidget(self.plan_box)
 
-        plan_options = QHBoxLayout()
+        self.plan_options_widget = QWidget()
+        plan_options = QHBoxLayout(self.plan_options_widget)
         plan_options.addWidget(QLabel("Mode"))
         self.plan_mode_combo = QComboBox()
         for value in BAKE_MODES:
@@ -602,9 +673,10 @@ class BakeWorkbench(QWidget):
         self.plan_alpha_blend_width.setAccessibleName("Bake plan alpha blend width")
         plan_options.addWidget(self.plan_alpha_blend_width)
         plan_options.addStretch(1)
-        outer.addLayout(plan_options)
+        outer.addWidget(self.plan_options_widget)
 
-        plan_row = QHBoxLayout()
+        self.plan_row_widget = QWidget()
+        plan_row = QHBoxLayout(self.plan_row_widget)
         plan_row.addWidget(QLabel("Saved plans"))
         self.plan_list = QListWidget()
         self.plan_list.setAccessibleName("Saved bake plans")
@@ -613,7 +685,7 @@ class BakeWorkbench(QWidget):
         plan_row.addWidget(self.plan_list, 1)
         self.plan_status_label = QLabel("No plan selected")
         plan_row.addWidget(self.plan_status_label)
-        outer.addLayout(plan_row)
+        outer.addWidget(self.plan_row_widget)
 
         self.status_label = QLabel("")
         outer.addWidget(self.status_label)
@@ -623,6 +695,7 @@ class BakeWorkbench(QWidget):
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self.cards_body, 1)
         self.main_window.selection_model.subscribe(lambda _ids: self._selection_changed())
+        self._set_workflow_mode("advanced")
         self._selection_changed()
 
     def _current_profile(self) -> str:
@@ -653,6 +726,47 @@ class BakeWorkbench(QWidget):
         self.status_label.setText(f"{profile}: {len(candidates)} candidate(s)")
         self._add_cards(candidates, profile)
         self._selection_changed()
+
+    def _set_workflow_mode(self, mode: str) -> None:
+        self._workflow_mode = mode
+        simple = mode == "simple"
+        self.simple_board.setVisible(simple)
+        self.plan_box.setVisible(not simple)
+        self.plan_options_widget.setVisible(not simple)
+        self.plan_row_widget.setVisible(not simple)
+        # Candidate cards remain constructed in Simple mode for backwards
+        # compatible API/tests, but the user sees the compact quick workflow.
+        self.cards_body.setVisible(not simple)
+        self._update_simple_board()
+
+    def _workflow_mode_changed(self, _index: int) -> None:
+        self._set_workflow_mode(self.workflow_mode.currentData() or "advanced")
+
+    def _update_simple_board(self) -> None:
+        document = self.main_window.document
+        selected = list(self.main_window.selection_model.instance_ids)
+        if document is None:
+            self.simple_sources_label.setText("No document")
+            self.quick_bake_button.setEnabled(False)
+            return
+        labels = [_label_for(document, instance_id) for instance_id in selected]
+        self.simple_sources_label.setText(
+            f"{len(labels)} selected: " + ", ".join(labels[:3]) + ("…" if len(labels) > 3 else "")
+            if labels else "Select at least two layers"
+        )
+        inferred = _infer_quick_result(document, selected) if len(selected) >= 2 else None
+        if inferred:
+            index = self.simple_result_combo.findData(inferred)
+            if index >= 0:
+                self.simple_result_combo.setCurrentIndex(index)
+        effective = self._simple_sources()
+        if inferred == "topwear_with_arms" and len(effective) != len(selected):
+            effective_labels = [_label_for(document, instance_id) for instance_id in effective]
+            self.simple_sources_label.setText(
+                f"{len(effective_labels)} torso sources: " + ", ".join(effective_labels)
+            )
+        semantic = self.simple_result_combo.currentText().strip()
+        self.quick_bake_button.setEnabled(len(selected) >= 2 and bool(semantic))
 
     def _refresh_plan_list(self) -> None:
         document = self.main_window.document
@@ -710,6 +824,12 @@ class BakeWorkbench(QWidget):
         if not plan_id or not semantic or not slot:
             self.status_label.setText("Plan id, result semantic, and result slot are required.")
             return
+        if plan_id == "torso_plan" and semantic == "topwear_with_arms":
+            sources = _torso_plan_sources(document, sources)
+            torso_semantics = {_label_for(document, instance_id).lower() for instance_id in sources}
+            if not {"topwear", "handwear"}.issubset(torso_semantics):
+                self.status_label.setText("torso_plan requires topwear and handwear sources.")
+                return
         mode = self.plan_mode_combo.currentData()
         seam_policy = normalize_seam_policy(
             {
@@ -784,6 +904,7 @@ class BakeWorkbench(QWidget):
     def _selection_changed(self) -> None:
         selected = self.main_window.selection_model.instance_ids
         self.bake_selected_button.setEnabled(self.main_window.document is not None and len(selected) >= 2)
+        self._update_simple_board()
         if self._manual_candidate is not None and selected != self._manual_candidate.instance_ids:
             self.refresh()
 
@@ -799,6 +920,94 @@ class BakeWorkbench(QWidget):
         self.main_window.canvas.scene_model.clear_transient_preview()
         self._add_cards([self._manual_candidate], None)
         self.status_label.setText(f"Selected layers: {len(selected)} · {analysis.verdict}")
+
+    def _simple_policy(self, semantic: str) -> dict:
+        cleanup = self.simple_cleanup_combo.currentData() or "auto"
+        return normalize_seam_policy(
+            {
+                "cleanup": cleanup,
+                "expand_under": 4 if cleanup == "aggressive" else 3,
+                "remove_internal_lines": cleanup != "off",
+                "contact_band_px": 3 if cleanup == "aggressive" else 2,
+                "tone_blend_width": 1,
+                "alpha_blend_width": 1,
+                "ownership_rule": semantic if semantic in BAKE_PROFILES else None,
+            },
+            result_semantic=semantic,
+            mode="semantic_merge",
+        )
+
+    def _simple_sources(self) -> list[str]:
+        selected = list(self.main_window.selection_model.instance_ids)
+        semantic = self.simple_result_combo.currentText().strip()
+        if semantic == "topwear_with_arms":
+            torso_sources = _torso_plan_sources(self.main_window.document, selected)
+            if torso_sources:
+                selected = torso_sources
+        return _default_staging_order(self.main_window, selected)
+
+    def _quick_preview(self, mode: str) -> None:
+        document = self.main_window.document
+        sources = self._simple_sources()
+        semantic = self.simple_result_combo.currentText().strip()
+        if document is None or len(sources) < 2 or not semantic:
+            self.status_label.setText("Select at least two layers and choose a result semantic.")
+            return
+        analysis = analyze_bake(document, sources, mode="semantic_merge", seam_policy=self._simple_policy(semantic), result_semantic=semantic)
+        if analysis.verdict == BLOCK:
+            self.status_label.setText("Quick Bake blocked: " + " | ".join(analysis.block_reasons))
+            return
+        self.main_window.canvas.scene_model.preview_bake_candidate(
+            sources,
+            mode,
+            0.5,
+            ordered_instance_ids=sources,
+            transform_overrides={},
+            bake_mode="semantic_merge",
+            seam_policy=self._simple_policy(semantic),
+        )
+        self.status_label.setText(f"Quick Bake preview {mode}: {analysis.verdict}")
+
+    def _quick_bake(self) -> None:
+        document = self.main_window.document
+        sources = self._simple_sources()
+        semantic = self.simple_result_combo.currentText().strip()
+        if document is None or len(sources) < 2 or not semantic:
+            self.status_label.setText("Select at least two layers and choose a result semantic.")
+            return
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", semantic):
+            self.status_label.setText("Result semantic must use letters, numbers, _, -, or .")
+            return
+        policy = self._simple_policy(semantic)
+        analysis = analyze_bake(document, sources, mode="semantic_merge", seam_policy=policy, result_semantic=semantic)
+        if analysis.verdict == BLOCK:
+            self.status_label.setText("Quick Bake blocked: " + " | ".join(analysis.block_reasons))
+            return
+        candidate = BakeCandidate("quick_selected_layers", sources, analysis)
+        derived_id = _unique_output_name(document, semantic)
+        result_holder: dict = {}
+        work_dir = Path(tempfile.mkdtemp(prefix="portrait-composer-quick-bake-"))
+
+        def commit(doc, image_sources):
+            result_holder["result"] = bake_candidate(
+                doc, image_sources, candidate,
+                derived_id=derived_id,
+                semantic=semantic,
+                work_dir=work_dir,
+                profile=None,
+                ordered_instance_ids=sources,
+                transform_overrides={},
+                mode="semantic_merge",
+                seam_policy=policy,
+            )
+
+        if self.main_window.run_command(commit):
+            derived_instance_id, warnings = result_holder["result"]
+            self.main_window.selection_model.select(derived_instance_id)
+            self.status_label.setText(
+                f"Quick Bake applied as {derived_id} · {analysis.verdict}"
+                + (f" · {len(warnings)} warning(s)" if warnings else "")
+            )
 
     def _zoom_100(self) -> None:
         self.main_window.canvas.resetTransform()

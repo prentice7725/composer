@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
 from .assets import AssetDefinition
+from .donor_slots import default_donor_slots, normalize_donor_slots
 from .history import HistoryManager
 from .instances import LayerInstance
 from .provenance import ProvenanceLog
@@ -68,6 +69,10 @@ class AssemblyDocument:
         # C6-D source replacement review state. ``None`` means that this
         # Assembly has not gone through a re-import review yet.
         self.remap_review: dict | None = None
+        # C3.1 structured face-expression donor board.  This is Composer
+        # authoring state; it is serialized in the v0.3 sidecar, not the
+        # frozen Assembly v0.2 manifest.
+        self.donor_slots: dict = default_donor_slots()
         self.provenance = ProvenanceLog()
         self.history = HistoryManager()
         self._transaction_depth = 0
@@ -137,6 +142,7 @@ class AssemblyDocument:
         self.composition = restored.composition
         self.bake_plans = restored.bake_plans
         self.remap_review = restored.remap_review
+        self.donor_slots = restored.donor_slots
         self.provenance = restored.provenance
         # history/undo state itself is NOT part of the document snapshot.
 
@@ -170,7 +176,7 @@ class AssemblyDocument:
 
     # ------------------------------------------------------------------
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "sources": {sid: s.to_dict() for sid, s in self.sources.items()},
             "assets": {aid: a.to_dict() for aid, a in self.assets.items()},
             "instances": {iid: i.to_dict() for iid, i in self.instances.items()},
@@ -184,6 +190,12 @@ class AssemblyDocument:
             "remap_review": copy.deepcopy(self.remap_review),
             "provenance": self.provenance.to_dict(),
         }
+        # Keep the strict v0.2 Assembly payload unchanged for documents that
+        # have no structured donor assignments.  Non-empty assignments are
+        # moved to the Composer authoring sidecar by bundle.py.
+        if any(entry for family in ("eyes", "mouth") for entry in self.donor_slots.get(family, {}).values()):
+            payload["donor_slots"] = copy.deepcopy(self.donor_slots)
+        return payload
 
     @staticmethod
     def from_dict(d: dict) -> "AssemblyDocument":
@@ -201,6 +213,7 @@ class AssemblyDocument:
         doc.composition = copy.deepcopy(d.get("composition", {"draw_order": [], "canvas": {}}))
         doc.bake_plans = copy.deepcopy(d.get("bake_plans", {}))
         doc.remap_review = copy.deepcopy(d.get("remap_review"))
+        doc.donor_slots = normalize_donor_slots(d.get("donor_slots"))
         doc.provenance = ProvenanceLog.from_dict(d.get("provenance", {}))
         return doc
 
