@@ -78,6 +78,35 @@ def test_main_window_run_command_refreshes_and_preserves_selection(qapp, portrai
     assert item.pos().x() == 33.0
 
 
+def test_main_window_run_command_preserves_canvas_zoom_and_scene_center(qapp, portrait_bundle: Path):
+    bundle = read_portrait_bundle(portrait_bundle)
+    document, image_sources, warnings = identity_assembly(bundle)
+    window = MainWindow()
+    window._display_document(document, image_sources, portrait_bundle, source_map=True, import_warnings=warnings)
+    window.resize(900, 700)
+    window.show()
+    qapp.processEvents()
+    window.canvas.scale(2.0, 2.0)
+    window.session.canvas_zoom = 2.0
+    window.canvas.centerOn(QPointF(13.0, 17.0))
+    qapp.processEvents()
+    before = window.canvas.capture_view_state()
+
+    instance_id = next(iter(document.instances))
+    from portrait_composer.ui.commands import set_instance_transform
+
+    assert window.run_command(
+        lambda doc, srcs: set_instance_transform(doc, srcs, instance_id, x=5.0, y=3.0)
+    )
+    after = window.canvas.capture_view_state()
+    assert before is not None and after is not None
+    assert after["transform"].m11() == pytest.approx(before["transform"].m11())
+    assert after["transform"].m22() == pytest.approx(before["transform"].m22())
+    assert after["center"].x() == pytest.approx(before["center"].x(), abs=0.1)
+    assert after["center"].y() == pytest.approx(before["center"].y(), abs=0.1)
+    window.close()
+
+
 def test_main_window_run_command_survives_before_first_save(qapp, portrait_bundle: Path):
     """A gizmo edit right after Import (bundle_path is still None) must not
     silently no-op -- this was a latent bug in _refresh_after_document_change."""

@@ -57,14 +57,17 @@ def _label_for(document, instance_id: str) -> str:
 def _default_staging_order(main_window, instance_ids: list[str]) -> list[str]:
     """Return the deterministic initial order for a transient bake recipe."""
     document = main_window.document
-    semantics = {_label_for(document, instance_id) for instance_id in instance_ids}
-    if not {"body_remainder", "handwear", "topwear"}.issubset(semantics):
+    semantics = {_label_for(document, instance_id).lower() for instance_id in instance_ids}
+    if not {"handwear", "topwear"}.issubset(semantics):
         return list(instance_ids)
-    priority = {"body_remainder": 0, "handwear": 1, "topwear": 2}
+    # Production torso composition is garment-only.  Handwear is placed
+    # under topwear so an arm overlay cannot leave its colour across the
+    # garment chest; body_remainder is never a source in this path.
+    priority = {"handwear": 0, "topwear": 1}
     original_position = {instance_id: index for index, instance_id in enumerate(instance_ids)}
 
     def key(instance_id: str) -> tuple[int, int]:
-        return priority.get(_label_for(document, instance_id), 1000), original_position[instance_id]
+        return priority.get(_label_for(document, instance_id).lower(), 1000), original_position[instance_id]
 
     return sorted(instance_ids, key=key)
 
@@ -87,13 +90,26 @@ def _infer_quick_result(document, instance_ids: list[str]) -> str | None:
     semantics = {_label_for(document, instance_id).lower() for instance_id in instance_ids}
     if "topwear" in semantics and ("handwear" in semantics or "sleeve" in semantics or "arm" in semantics):
         return "topwear_with_arms"
-    if "body_remainder" in semantics and any(
-        value in semantics for value in ("sleeve", "handwear", "arm", "body_sleeve")
-    ):
-        return "body_with_sleeves"
     if any("coat" in value for value in semantics):
         return "coat_full"
     return None
+
+
+def _auto_torso_sources(document) -> list[str]:
+    """Find the unambiguous visible topwear + handwear production pair."""
+    if document is None:
+        return []
+    matches = {"topwear": [], "handwear": []}
+    for instance_id in document.composition.get("draw_order", []):
+        instance = document.instances.get(instance_id)
+        if instance is None or not instance.visible or instance.opacity <= 0:
+            continue
+        semantic = _label_for(document, instance_id).lower()
+        if semantic in matches:
+            matches[semantic].append(instance_id)
+    if len(matches["topwear"]) == 1 and len(matches["handwear"]) == 1:
+        return [matches["handwear"][0], matches["topwear"][0]]
+    return []
 
 
 def _torso_plan_sources(document, instance_ids: list[str]) -> list[str]:
@@ -548,9 +564,15 @@ class BakeWorkbench(QWidget):
         self.bake_selected_button.setToolTip("Analyze the currently selected Tree layers as one bake candidate")
         self.bake_selected_button.clicked.connect(self._analyze_selected)
         top.addWidget(self.bake_selected_button)
+        self.advanced_button = QPushButton("Advanced Options")
+        self.advanced_button.setCheckable(True)
+        self.advanced_button.setAccessibleName("Show advanced bake options")
+        self.advanced_button.clicked.connect(self._toggle_advanced)
+        top.addWidget(self.advanced_button)
         outer.addLayout(top)
 
-        workflow_row = QHBoxLayout()
+        workflow_panel = QWidget()
+        workflow_row = QHBoxLayout(workflow_panel)
         workflow_row.addWidget(QLabel("Bake Workflow"))
         self.workflow_mode = QComboBox()
         self.workflow_mode.addItem("Simple", "simple")
@@ -560,7 +582,8 @@ class BakeWorkbench(QWidget):
         self.workflow_mode.currentIndexChanged.connect(self._workflow_mode_changed)
         workflow_row.addWidget(self.workflow_mode)
         workflow_row.addStretch(1)
-        outer.addLayout(workflow_row)
+        outer.addWidget(workflow_panel)
+        self.workflow_panel = workflow_panel
 
         self.simple_board = QFrame()
         self.simple_board.setFrameShape(QFrame.Shape.StyledPanel)
@@ -590,7 +613,7 @@ class BakeWorkbench(QWidget):
         self.simple_after_button.clicked.connect(lambda: self._quick_preview("after"))
         simple_layout.addWidget(self.simple_before_button)
         simple_layout.addWidget(self.simple_after_button)
-        self.quick_bake_button = QPushButton("Quick Bake")
+        self.quick_bake_button = QPushButton("Bake for Rig")
         self.quick_bake_button.setAccessibleName("Quick bake selected layers")
         self.quick_bake_button.clicked.connect(self._quick_bake)
         simple_layout.addWidget(self.quick_bake_button)
@@ -730,6 +753,9 @@ class BakeWorkbench(QWidget):
     def _set_workflow_mode(self, mode: str) -> None:
         self._workflow_mode = mode
         simple = mode == "simple"
+        self.workflow_panel.setVisible(not simple)
+        self.advanced_button.setChecked(not simple)
+        self.bake_selected_button.setVisible(not simple)
         self.simple_board.setVisible(simple)
         self.plan_box.setVisible(not simple)
         self.plan_options_widget.setVisible(not simple)
@@ -738,6 +764,11 @@ class BakeWorkbench(QWidget):
         # compatible API/tests, but the user sees the compact quick workflow.
         self.cards_body.setVisible(not simple)
         self._update_simple_board()
+
+    def _toggle_advanced(self, checked: bool) -> None:
+        self.workflow_mode.setCurrentIndex(
+            self.workflow_mode.findData("advanced" if checked else "simple")
+        )
 
     def _workflow_mode_changed(self, _index: int) -> None:
         self._set_workflow_mode(self.workflow_mode.currentData() or "advanced")
@@ -749,24 +780,34 @@ class BakeWorkbench(QWidget):
             self.simple_sources_label.setText("No document")
             self.quick_bake_button.setEnabled(False)
             return
-        labels = [_label_for(document, instance_id) for instance_id in selected]
-        self.simple_sources_label.setText(
-            f"{len(labels)} selected: " + ", ".join(labels[:3]) + ("…" if len(labels) > 3 else "")
-            if labels else "Select at least two layers"
-        )
-        inferred = _infer_quick_result(document, selected) if len(selected) >= 2 else None
+        auto_sources = _auto_torso_sources(document)
+        if auto_sources:
+            index = self.simple_result_combo.findData("topwear_with_arms")
+            if index >= 0:
+                self.simple_result_combo.setCurrentIndex(index)
+        labels = [_label_for(document, instance_id) for instance_id in (auto_sources or selected)]
+        if auto_sources:
+            self.simple_sources_label.setText("Auto sources: " + " + ".join(labels))
+            self.simple_result_combo.setEnabled(False)
+        else:
+            self.simple_sources_label.setText(
+                f"{len(labels)} selected: " + ", ".join(labels[:3]) + ("…" if len(labels) > 3 else "")
+                if labels else "Select topwear + handwear"
+            )
+            self.simple_result_combo.setEnabled(True)
+        inferred = _infer_quick_result(document, auto_sources or selected) if len(auto_sources or selected) >= 2 else None
         if inferred:
             index = self.simple_result_combo.findData(inferred)
             if index >= 0:
                 self.simple_result_combo.setCurrentIndex(index)
         effective = self._simple_sources()
-        if inferred == "topwear_with_arms" and len(effective) != len(selected):
+        if inferred == "topwear_with_arms" and len(effective) != len(selected) and not auto_sources:
             effective_labels = [_label_for(document, instance_id) for instance_id in effective]
             self.simple_sources_label.setText(
                 f"{len(effective_labels)} torso sources: " + ", ".join(effective_labels)
             )
         semantic = self.simple_result_combo.currentText().strip()
-        self.quick_bake_button.setEnabled(len(selected) >= 2 and bool(semantic))
+        self.quick_bake_button.setEnabled(len(effective) >= 2 and bool(semantic))
 
     def _refresh_plan_list(self) -> None:
         document = self.main_window.document
@@ -941,7 +982,9 @@ class BakeWorkbench(QWidget):
         selected = list(self.main_window.selection_model.instance_ids)
         semantic = self.simple_result_combo.currentText().strip()
         if semantic == "topwear_with_arms":
-            torso_sources = _torso_plan_sources(self.main_window.document, selected)
+            torso_sources = _auto_torso_sources(self.main_window.document)
+            if not torso_sources:
+                torso_sources = _torso_plan_sources(self.main_window.document, selected)
             if torso_sources:
                 selected = torso_sources
         return _default_staging_order(self.main_window, selected)

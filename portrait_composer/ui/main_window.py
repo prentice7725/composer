@@ -143,10 +143,13 @@ class MainWindow(QMainWindow):
         self.workbench.setCurrentWidget(self.workbench_placeholder)
 
     def _build_context_bar(self) -> None:
-        toolbar = QToolBar("Contexts", self)
-        toolbar.setObjectName("contextToolbar")
-        toolbar.setMovable(False)
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        # Keep the complete context vocabulary alive for diagnostics and
+        # advanced automation, but make the default production path a small
+        # three-step workflow.  Advanced contexts remain reachable from View.
+        advanced_toolbar = QToolBar("Advanced Contexts", self)
+        advanced_toolbar.setObjectName("advancedContextToolbar")
+        advanced_toolbar.setMovable(False)
+        advanced_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.context_buttons = {}
         for context in CONTEXTS:
             button = QToolButton()
@@ -156,26 +159,48 @@ class MainWindow(QMainWindow):
             button.setToolTip(f"Switch to {context} context")
             button.setAccessibleName(f"{context} context")
             button.clicked.connect(lambda checked, c=context: self.set_context(c))
-            toolbar.addWidget(button)
+            advanced_toolbar.addWidget(button)
             self.context_buttons[context] = button
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Workspace"))
-        self.workspace_buttons = {}
-        for axis in ("COMPOSE", "RIG PREP"):
+
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, advanced_toolbar)
+        advanced_toolbar.hide()
+        self.advanced_context_toolbar = advanced_toolbar
+
+        production_toolbar = QToolBar("Production Workflow", self)
+        production_toolbar.setObjectName("productionWorkflowToolbar")
+        production_toolbar.setMovable(False)
+        production_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.production_buttons = {}
+        production_contexts = (
+            ("COMPOSE", "ASSEMBLE"),
+            ("EXPRESSIONS", "DONOR"),
+            ("PREPARE RIG", "BAKE"),
+        )
+        for label, context in production_contexts:
             button = QToolButton()
-            button.setText(axis)
+            button.setProperty("i18n_source", label)
+            button.setText(self.tr(label))
             button.setCheckable(True)
-            button.setToolTip(
-                "Composition and source authoring" if axis == "COMPOSE"
-                else "Rig intent and bake preparation"
-            )
-            button.setAccessibleName(f"{axis} workspace")
-            button.clicked.connect(lambda checked, value=axis: self._set_workspace_axis(value))
-            toolbar.addWidget(button)
-            self.workspace_buttons[axis] = button
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+            button.setToolTip(self.tr({
+                "COMPOSE": "Composition and source authoring",
+                "EXPRESSIONS": "Author eye and mouth expression donors",
+                "PREPARE RIG": "Prepare torso bake and rig export",
+            }[label]))
+            button.setAccessibleName(f"{label} production workflow")
+            button.clicked.connect(lambda checked, c=context: self._enter_production_context(c))
+            production_toolbar.addWidget(button)
+            self.production_buttons[label] = button
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, production_toolbar)
+        self.production_toolbar = production_toolbar
+        self.workspace_buttons = {}
         self.set_context("ASSEMBLE")
         self._set_workspace_axis("COMPOSE")
+
+    def _enter_production_context(self, context: str) -> None:
+        """Enter one of the compact production workflows."""
+        self.set_context(context, production=True)
+        if context == "DONOR":
+            self.donor_workbench._set_advanced(False)
 
     def _set_workspace_axis(self, axis: str) -> None:
         """Navigate the two broad authoring phases without replacing contexts."""
@@ -287,12 +312,19 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.workbench_dock.toggleViewAction())
         view_menu.addAction(self.diagnostics_dock.toggleViewAction())
         view_menu.addSeparator()
-        context_shortcuts = (("Harvest", "H", "HARVEST"), ("Donor Align", "D", "DONOR"), ("Rig Intent", "I", "RIG INTENT"), ("Bake", "B", "BAKE"))
+        advanced_menu = view_menu.addMenu("Advanced Workbenches")
+        context_shortcuts = (
+            ("Harvest", "H", "HARVEST"),
+            ("Variants", "V", "VARIANTS"),
+            ("Donor Align", "D", "DONOR"),
+            ("Rig Intent", "I", "RIG INTENT"),
+            ("Bake", "B", "BAKE"),
+        )
         for label, key, context in context_shortcuts:
             action = QAction(label, self)
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(lambda checked=False, c=context: self.set_context(c))
-            view_menu.addAction(action)
+            advanced_menu.addAction(action)
 
         language_menu = view_menu.addMenu("Language")
         self._language_actions = {}
@@ -437,8 +469,9 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.restoreState(state)
         context = self.settings.value("last_context", "ASSEMBLE")
+        workflow = str(self.settings.value("bake_workflow", "simple") or "simple")
         if context in CONTEXTS:
-            self.set_context(str(context))
+            self.set_context(str(context), production=(str(context) == "BAKE" and workflow == "simple"))
         axis = str(self.settings.value("workspace_axis", self.session.workspace_axis) or "COMPOSE")
         if axis in {"COMPOSE", "RIG PREP"}:
             self.session.workspace_axis = axis
@@ -467,13 +500,18 @@ class MainWindow(QMainWindow):
         self.settings.setValue("canvas_zoom", self.session.canvas_zoom)
         self.settings.setValue("canvas_pan_x", self.session.canvas_pan[0])
         self.settings.setValue("canvas_pan_y", self.session.canvas_pan[1])
+        self.settings.setValue("bake_workflow", self.bake_workbench.workflow_mode.currentData() or "simple")
         self.settings.setValue("tree_filter", self.tree_dock.search.text())
         self.settings.setValue("tree_filter_mode", self.tree_dock.filter_selector.currentText())
         self.settings.setValue("recent_files", self.recent_files)
         self.settings.sync()
 
-    def set_context(self, context: str) -> None:
+    def set_context(self, context: str, *, production: bool = False) -> None:
         previous = self.session.active_context
+        if context == "BAKE":
+            self.bake_workbench.workflow_mode.setCurrentIndex(
+                self.bake_workbench.workflow_mode.findData("simple" if production else "advanced")
+            )
         self.session.active_context = context
         self.session.workspace_axis = "RIG PREP" if context in {"DONOR", "RIG INTENT", "BAKE"} else "COMPOSE"
         if context == "ASSEMBLE":
@@ -486,6 +524,9 @@ class MainWindow(QMainWindow):
             button.setChecked(name == context)
         for name, button in getattr(self, "workspace_buttons", {}).items():
             button.setChecked(name == self.session.workspace_axis)
+        production_context = {"COMPOSE": "ASSEMBLE", "EXPRESSIONS": "DONOR", "PREPARE RIG": "BAKE"}
+        for label, button in getattr(self, "production_buttons", {}).items():
+            button.setChecked(production_context[label] == context)
         self.canvas.scene_model.set_context(context)
         if previous == "DONOR" and context != "DONOR":
             # An uncommitted donor ghost is local, transient state for this
@@ -953,9 +994,15 @@ class MainWindow(QMainWindow):
         # created document that hasn't been saved yet.
         if self.document is None:
             return
+        view_state = self.canvas.capture_view_state()
         self._refresh_diagnostics()
         self.tree_dock.load_document(self.document, self.diagnostics)
-        self.canvas.load_document(self.document, self._canvas_layers_dir, self._canvas_image_sources)
+        self.canvas.load_document(
+            self.document,
+            self._canvas_layers_dir,
+            self._canvas_image_sources,
+            preserve_view_state=view_state,
+        )
         self.session.last_render_ms = self.canvas.scene_model.last_render_ms
         self.inspector_dock.refresh(self.selection_model.instance_ids)
         # Keep whichever workbench is currently visible in sync too -- not

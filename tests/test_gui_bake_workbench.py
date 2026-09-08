@@ -13,10 +13,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QListWidget
+from PIL import Image
 
 from portrait_composer.assembly import identity_assembly
+from portrait_composer.assets import AssetDefinition
 from portrait_composer.bake import CAN_BAKE, WARN
 from portrait_composer.bundle import read_portrait_bundle
+from portrait_composer.instances import LayerInstance
 from portrait_composer.rig_intent import set_deformation_scope
 from portrait_composer.ui.main_window import MainWindow
 
@@ -297,6 +300,25 @@ def test_simple_torso_quick_bake_excludes_body_remainder(window):
         for instance_id in wb._simple_sources()
     }
     assert selected_labels <= {"topwear", "handwear"}
+
+
+def test_production_prepare_rig_auto_detects_garment_pair(window, tmp_path: Path):
+    handwear_path = tmp_path / "handwear.png"
+    Image.new("RGBA", (40, 40), (200, 80, 80, 255)).save(handwear_path)
+    with window.document.transaction():
+        window.document.add_asset(AssetDefinition(id="handwear", semantic="handwear", planes=["handwear"]))
+        window.document.add_instance(
+            LayerInstance(id="handwear__instance", asset_ref="handwear", slot="torso_front", draw_order=30)
+        )
+        window.document.composition["draw_order"].append("handwear__instance")
+    window.image_sources["handwear__instance"] = handwear_path
+    window._refresh_after_document_change()
+
+    window._enter_production_context("BAKE")
+    wb = window.bake_workbench
+    assert wb.workflow_mode.currentData() == "simple"
+    assert wb._simple_sources() == ["handwear__instance", "topwear__instance"]
+    assert not wb.bake_selected_button.isVisible()
 
 
 def test_delete_selected_layers_is_undoable(window):

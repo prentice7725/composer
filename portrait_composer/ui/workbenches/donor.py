@@ -107,6 +107,11 @@ class DonorWorkbench(QWidget):
         self.import_button.setAccessibleName("Import donor image")
         self.import_button.clicked.connect(self._pick_donor)
         top.addWidget(self.import_button)
+        self.advanced_button = QPushButton("Advanced Options")
+        self.advanced_button.setCheckable(True)
+        self.advanced_button.setAccessibleName("Show advanced donor options")
+        self.advanced_button.clicked.connect(self._toggle_advanced)
+        top.addWidget(self.advanced_button)
         self.target_label = QLabel("Target: none selected")
         top.addWidget(self.target_label, 1)
         outer.addLayout(top)
@@ -141,7 +146,8 @@ class DonorWorkbench(QWidget):
         slot_layout.addWidget(self.expression_preview_button, row, 3, 1, 2)
         outer.addWidget(slot_box)
 
-        form = QFormLayout()
+        form_panel = QWidget()
+        form = QFormLayout(form_panel)
         self.semantic_field = QLineEdit()
         self.semantic_field.setAccessibleName("Donor semantic")
         self.semantic_field.textChanged.connect(self._semantic_changed)
@@ -158,9 +164,11 @@ class DonorWorkbench(QWidget):
         self.import_mode.activated.connect(lambda _index: setattr(self, "_import_mode_locked", True))
         self._import_mode_locked = False
         form.addRow("Import as", self.import_mode)
-        outer.addLayout(form)
+        outer.addWidget(form_panel)
+        self.advanced_form_panel = form_panel
 
-        mode_row = QHBoxLayout()
+        mode_panel = QWidget()
+        mode_row = QHBoxLayout(mode_panel)
         mode_row.addWidget(QLabel("Preview"))
         self.mode_group = QButtonGroup(self)
         for mode in MODES:
@@ -172,9 +180,11 @@ class DonorWorkbench(QWidget):
             button.toggled.connect(self._mode_changed)
             self.mode_group.addButton(button)
             mode_row.addWidget(button)
-        outer.addLayout(mode_row)
+        outer.addWidget(mode_panel)
+        self.advanced_mode_panel = mode_panel
 
-        opacity_row = QHBoxLayout()
+        opacity_panel = QWidget()
+        opacity_row = QHBoxLayout(opacity_panel)
         opacity_row.addWidget(QLabel("Ghost opacity"))
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
@@ -182,7 +192,8 @@ class DonorWorkbench(QWidget):
         self.opacity_slider.setAccessibleName("Donor ghost opacity")
         self.opacity_slider.valueChanged.connect(self._opacity_changed)
         opacity_row.addWidget(self.opacity_slider, 1)
-        outer.addLayout(opacity_row)
+        outer.addWidget(opacity_panel)
+        self.advanced_opacity_panel = opacity_panel
 
         self.metrics_label = QLabel("")
         self.metrics_label.setStyleSheet("font-family: monospace;")
@@ -207,7 +218,23 @@ class DonorWorkbench(QWidget):
         self._metrics_timer = QTimer(self)
         self._metrics_timer.setInterval(120)
         self._metrics_timer.timeout.connect(self._refresh_metrics)
+        self._set_advanced(False)
         self.refresh()
+
+    def _toggle_advanced(self, checked: bool) -> None:
+        self._set_advanced(checked)
+
+    def _set_advanced(self, visible: bool) -> None:
+        self.advanced_button.setChecked(visible)
+        for widget in (
+            self.import_button,
+            self.advanced_form_panel,
+            self.advanced_mode_panel,
+            self.advanced_opacity_panel,
+            self.metrics_label,
+            self.allow_drift_box,
+        ):
+            widget.setVisible(visible)
 
     def _semantic_changed(self, semantic: str) -> None:
         if not self._import_mode_locked and expression_donor_kind(semantic):
@@ -220,7 +247,7 @@ class DonorWorkbench(QWidget):
             button.setEnabled(enabled)
 
     def refresh(self) -> None:
-        info = _donor_target_info(self.main_window, self.semantic_field.text())
+        info = _target_info(self.main_window)
         if info is None:
             self.target_label.setText("Target: select exactly one Tree layer")
         else:
@@ -281,7 +308,7 @@ class DonorWorkbench(QWidget):
         self._donor_path = Path(path)
         self._donor_image = image.convert("RGBA")
 
-        info = _donor_target_info(self.main_window, semantic)
+        info = _donor_target_info(self.main_window, self.semantic_field.text())
         donor_w, donor_h = self._donor_image.size
         if info is not None and expression_donor_kind(self.semantic_field.text() or info["semantic"]):
             initial = dict(info["transform"])

@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QTransform
 from PySide6.QtWidgets import QGraphicsView
 
 from .scene import CanvasScene, INSTANCE_ROLE
@@ -35,9 +35,40 @@ class CanvasView(QGraphicsView):
         self._space_panning = False
         self._mask_brush: dict | None = None
 
-    def load_document(self, document, layers_dir, image_sources=None) -> None:
+    def load_document(self, document, layers_dir, image_sources=None, *, preserve_view_state=None) -> None:
+        view_state = preserve_view_state
+        if view_state is True:
+            view_state = self.capture_view_state()
         self.scene_model.load_document(document, layers_dir, image_sources)
-        self.fit_canvas()
+        if view_state is None:
+            self.fit_canvas()
+        else:
+            self.restore_exact_view_state(view_state)
+
+    def capture_view_state(self) -> dict | None:
+        """Capture the actual viewport, not just the coarse session values."""
+        if self.scene_model.sceneRect().isEmpty() or self.viewport().size().isEmpty():
+            return None
+        return {
+            "transform": QTransform(self.transform()),
+            "center": self.mapToScene(self.viewport().rect().center()),
+            "zoom": float(self.session.canvas_zoom),
+        }
+
+    def restore_exact_view_state(self, state: dict) -> None:
+        """Restore a view after a scene reload without fitting the canvas."""
+        transform = state.get("transform")
+        center = state.get("center")
+        if transform is None or center is None:
+            self.fit_canvas()
+            return
+        self.setTransform(QTransform(transform))
+        self.centerOn(center)
+        self.session.canvas_zoom = max(0.05, min(32.0, float(state.get("zoom", self.session.canvas_zoom))))
+        self.session.canvas_pan = (
+            float(self.horizontalScrollBar().value()),
+            float(self.verticalScrollBar().value()),
+        )
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
@@ -292,6 +323,11 @@ class CanvasView(QGraphicsView):
             for other in rects[1:]:
                 rect = rect.united(other)
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self.session.canvas_zoom = float(self.transform().m11())
+            self.session.canvas_pan = (
+                float(self.horizontalScrollBar().value()),
+                float(self.verticalScrollBar().value()),
+            )
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         window = self.window()
