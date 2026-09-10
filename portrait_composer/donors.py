@@ -388,7 +388,11 @@ def _auto_expression_preset(document: "AssemblyDocument", variant_set_id: str, i
     variants[variant_set_id] = instance_id
     document.expressions[preset_name] = {
         "variants": variants,
-        "metadata": {"auto_generated": True, "source": "donor_import"},
+        "metadata": {
+            "auto_generated": True,
+            "source": "donor_import",
+            "preserve": ["blink", "viseme"],
+        },
     }
 
 

@@ -15,6 +15,7 @@ from ...render import _positioned, render_reference, render_subset, render_subse
 from ...preview import PreviewState
 from ...seam_repair import normalize_seam_policy, resolve_bake_mode
 from ...seam_reference import repair_bake_seams
+from ...visual_ops import apply_visual_ops
 from .donor_align import DonorAlignController
 from .gizmos import TransformGizmo
 from .region_edit import RegionEditController
@@ -161,6 +162,27 @@ class CanvasScene(QGraphicsScene):
     def set_context(self, context: str) -> None:
         self.context = context
 
+    def preview_color_match(self, instance_id: str, params: dict) -> None:
+        """Show a Color VisualOp preview without changing the document."""
+        if self._reference_item is None or self._committed_reference is None:
+            return
+        path = self._resolve_image_path(instance_id)
+        instance = self.document.instances.get(instance_id) if self.document is not None else None
+        if path is None or instance is None or not path.exists():
+            return
+        try:
+            with Image.open(path) as raw:
+                corrected = apply_visual_ops(
+                    raw.convert("RGBA"),
+                    [{"id": "preview", "type": "color", "params": params}],
+                )
+            positioned, offset = _positioned(corrected, instance.transform)
+        except (OSError, ValueError):
+            return
+        preview = self._committed_reference.copy()
+        preview.alpha_composite(positioned, dest=offset)
+        self._set_preview_pixmap(preview)
+
     # -- transient previews (directive #8.2, #9.3, #18) --------------------
     # Hover/Expression previews are pure Qt-side pixmap swaps: they read the
     # document (existing transforms, variant membership) but never write to
@@ -260,6 +282,13 @@ class CanvasScene(QGraphicsScene):
         resolved_active = {
             vs_id: overrides.get(vs_id, vs.get("active")) for vs_id, vs in document.variant_sets.items()
         }
+        resolved_groups = {}
+        for vs_id, vs in document.variant_sets.items():
+            active = resolved_active[vs_id]
+            resolved_groups[vs_id] = next(
+                (set(member_ids) for member_ids in (vs.get("state_groups") or {}).values() if active in member_ids),
+                {active},
+            )
         member_of: dict[str, str] = {}
         for vs_id, vs in document.variant_sets.items():
             for member_id in vs.get("members", []):
@@ -271,7 +300,7 @@ class CanvasScene(QGraphicsScene):
             if inst is None or inst.opacity <= 0:
                 continue
             vs_id = member_of.get(instance_id)
-            visible = (instance_id == resolved_active.get(vs_id)) if vs_id is not None else inst.visible
+            visible = (instance_id in resolved_groups.get(vs_id, {resolved_active.get(vs_id)})) if vs_id is not None else inst.visible
             if not visible:
                 continue
             path = self._resolve_image_path(instance_id)

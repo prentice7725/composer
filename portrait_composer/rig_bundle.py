@@ -15,6 +15,7 @@ from PIL import Image
 from .bundle import ASSEMBLY_FORMAT
 from .render import render_subset
 from .visual_ops import apply_visual_ops
+from .expressions import build_expression_intent
 
 RIG_BUNDLE_FORMAT = "portrait-rig-bundle"
 RIG_BUNDLE_VERSION = "0.3"
@@ -111,7 +112,10 @@ def validate_exported_rig_bundle(out_dir: Path) -> list[str]:
         errors.append(f"unexpected Rig Bundle format: {manifest.get('format')!r}")
     if manifest.get("version") != RIG_BUNDLE_VERSION:
         errors.append(f"unexpected Rig Bundle version: {manifest.get('version')!r}")
-    required = ("canvas", "layers", "draw_order", "instances", "assets", "rig_intent", "donors")
+    required = (
+        "canvas", "layers", "draw_order", "instances", "assets", "rig_intent", "donors",
+        "expression_intent",
+    )
     for key in required:
         if key not in manifest:
             errors.append(f"manifest missing required field {key!r}")
@@ -124,6 +128,11 @@ def validate_exported_rig_bundle(out_dir: Path) -> list[str]:
             errors.append(f"manifest.instances missing visible layer {instance_id!r}")
         if not (out_dir / "layers" / f"{instance_id}.png").exists():
             errors.append(f"missing canonical layer artifact for {instance_id!r}")
+    expression_intent = manifest.get("expression_intent")
+    if not isinstance(expression_intent, dict):
+        errors.append("manifest.expression_intent must be an object")
+    elif expression_intent.get("profile") != "face_expression_core_v2":
+        errors.append("manifest.expression_intent.profile must be 'face_expression_core_v2'")
     for instance_id, instance in instances.items():
         for op in instance.get("visual_ops", []):
             if op.get("type") != "mask":
@@ -213,6 +222,7 @@ def export_rig_bundle(document, image_sources: dict, out_dir: Path, *, reference
         "instances": {},
         "variant_sets": document.variant_sets,
         "expressions": document.expressions,
+        "expression_intent": build_expression_intent(document),
         "rig_intent": document.rig_intent,
         "secondary_regions": document.rig_intent.get("regions", {}),
         "attachments": document.rig_intent.get("attachments", {}),

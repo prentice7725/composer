@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QSettings, Qt
@@ -31,6 +32,7 @@ from ..bundle import (
 from ..document import AssemblyDocument
 from ..render import render_reference
 from ..rig_bundle import export_rig_bundle
+from ..external_edit import apply_ora_reimport, export_ora, inspect_ora
 from ..remap import apply_remap_resolution, classify_remap
 from .canvas.view import CanvasView
 from .commands import harvest_semantic, nudge_draw_order
@@ -241,6 +243,13 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_bundle_as)
         export_rig_action = QAction("Export Rig Bundle…", self)
         export_rig_action.triggered.connect(self.export_rig_bundle_dialog)
+        external_menu = file_menu.addMenu("External Edit")
+        export_ora_action = QAction("Export OpenRaster (.ora)…", self)
+        export_ora_action.triggered.connect(self.export_ora_dialog)
+        reimport_ora_action = QAction("Re-import OpenRaster (.ora)…", self)
+        reimport_ora_action.triggered.connect(self.reimport_ora_dialog)
+        external_menu.addAction(export_ora_action)
+        external_menu.addAction(reimport_ora_action)
         exit_action = QAction("Exit", self)
         exit_action.setShortcut(QKeySequence("Ctrl+Q"))
         exit_action.triggered.connect(lambda: self.close())
@@ -874,6 +883,64 @@ class MainWindow(QMainWindow):
             if review.exec() != review.DialogCode.Accepted:
                 return
             self._write_rig_bundle(Path(chosen))
+
+    def export_ora_dialog(self) -> None:
+        if self.document is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export OpenRaster", "portrait-edit.ora", "OpenRaster (*.ora);;All files (*)"
+        )
+        if not path:
+            return
+        target = Path(path)
+        try:
+            ora_path, sidecar_path = export_ora(self.document, self.image_sources, target)
+            self.statusBar().showMessage(f"External edit exported: {ora_path} + {sidecar_path.name}", 7000)
+        except Exception as exc:
+            QMessageBox.critical(self, "External edit export failed", str(exc))
+
+    def reimport_ora_dialog(self) -> None:
+        if self.document is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Re-import OpenRaster", "", "OpenRaster (*.ora);;All files (*)"
+        )
+        if not path:
+            return
+        ora_path = Path(path)
+        sidecar_path = ora_path.with_name("composer-roundtrip.json")
+        if not sidecar_path.exists():
+            chosen, _ = QFileDialog.getOpenFileName(
+                self, "Choose Composer roundtrip sidecar", str(sidecar_path), "JSON (*.json);;All files (*)"
+            )
+            if not chosen:
+                return
+            sidecar_path = Path(chosen)
+        try:
+            report = inspect_ora(ora_path, sidecar_path)
+            changed = [instance_id for instance_id, status in report["layers"].items() if status == "PIXELS_CHANGED"]
+            new_layers = [instance_id for instance_id, status in report["layers"].items() if status == "NEW_EXTERNAL_LAYER"]
+            if not changed:
+                self.statusBar().showMessage("OpenRaster re-import: no matched pixel changes.", 5000)
+                return
+            detail = f"Matched pixel changes: {len(changed)}"
+            if new_layers:
+                detail += f"\nNew external layers ignored: {len(new_layers)}"
+            answer = QMessageBox.question(self, "Apply OpenRaster changes?", detail)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            report = apply_ora_reimport(
+                self.document,
+                self.image_sources,
+                ora_path,
+                sidecar_path,
+                Path(tempfile.mkdtemp(prefix="portrait-composer-ora-")),
+                instance_ids=changed,
+            )
+            self._refresh_after_document_change()
+            self.statusBar().showMessage(f"OpenRaster re-import applied: {len(report['applied'])} layer(s)", 6000)
+        except Exception as exc:
+            QMessageBox.critical(self, "External edit re-import failed", str(exc))
 
     def _write_rig_bundle(self, target: Path) -> bool:
         if self.document is None:

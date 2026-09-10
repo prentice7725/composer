@@ -15,6 +15,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QDoubleSpinBox,
     QFormLayout,
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...slots import SLOT_VOCABULARY
+from ...color_match import color_match_params
 from ..commands import (
     set_instance_opacity,
     set_instance_plane,
@@ -41,6 +44,7 @@ from ..commands import (
     add_instance_mask,
     add_instance_quad_warp,
     add_instance_color,
+    add_instance_color_match,
     update_instance_visual_op,
     paint_instance_mask,
     align_instance_to_target,
@@ -64,11 +68,29 @@ class InspectorDock(QDockWidget):
         self.setWidget(self.body)
         self._instance_id: str | None = None
         self._visual_ops: dict[str, dict] = {}
+        self._advanced_button: QToolButton | None = None
+        self._advanced_row_start: int | None = None
         selection_model.subscribe(self.refresh)
 
     def _clear(self) -> None:
         while self.form.rowCount():
             self.form.removeRow(0)
+        self._advanced_button = None
+        self._advanced_row_start = None
+
+    def _set_advanced(self, expanded: bool) -> None:
+        button = self._advanced_button
+        start = self._advanced_row_start
+        if button is None or start is None:
+            return
+        button.setChecked(expanded)
+        button.setText("▾ Advanced" if expanded else "▸ Advanced")
+        for row in range(start, self.form.rowCount()):
+            for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+                item = self.form.itemAt(row, role)
+                widget = item.widget() if item is not None else None
+                if widget is not None:
+                    widget.setVisible(expanded)
 
     def _main_window(self):
         window = self.parent()
@@ -95,6 +117,13 @@ class InspectorDock(QDockWidget):
         self.form.addRow(QLabel("Identity"), QLabel(instance_id))
         self.form.addRow(QLabel("Asset"), QLabel(instance.asset_ref))
         self.form.addRow(QLabel("Semantic"), QLabel(asset.semantic if asset else "—"))
+        summary_rows = self.form.rowCount()
+        self._advanced_button = QToolButton()
+        self._advanced_button.setCheckable(True)
+        self._advanced_button.setAccessibleName("Show advanced inspector controls")
+        self._advanced_button.clicked.connect(self._set_advanced)
+        self.form.insertRow(summary_rows, self._advanced_button)
+        self._advanced_row_start = summary_rows + 1
         slot_box = QComboBox()
         slot_box.setEditable(True)
         slot_box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -202,6 +231,7 @@ class InspectorDock(QDockWidget):
             box.setAccessibleName(f"Transform {name}")
             box.editingFinished.connect(lambda field_name=name, spin=box: self._commit_transform_field(field_name, spin.value()))
             self.form.addRow(QLabel(name), box)
+        self._set_advanced(False)
 
     def _add_visual_ops_controls(self, instance) -> None:
         """Compact non-destructive VisualOps controls."""
@@ -228,6 +258,9 @@ class InspectorDock(QDockWidget):
         color_button = QPushButton("Add Color")
         color_button.setAccessibleName("Add color visual operation")
         color_button.clicked.connect(self._add_color)
+        match_button = QPushButton("Color Match…")
+        match_button.setAccessibleName("Color match selected layer")
+        match_button.clicked.connect(self._color_match)
         invert_button = QPushButton("Invert Selected Mask")
         invert_button.setAccessibleName("Invert selected mask")
         invert_button.clicked.connect(lambda: self._mask_action(op_list, "invert"))
@@ -235,7 +268,12 @@ class InspectorDock(QDockWidget):
         reset_button.setAccessibleName("Reset visual operations")
         reset_button.clicked.connect(self._reset_masks)
         self.form.addRow(add_button, quad_button)
-        self.form.addRow(QLabel("Color"), color_button)
+        color_actions = QWidget()
+        color_actions_layout = QHBoxLayout(color_actions)
+        color_actions_layout.setContentsMargins(0, 0, 0, 0)
+        color_actions_layout.addWidget(color_button)
+        color_actions_layout.addWidget(match_button)
+        self.form.addRow(QLabel("Color"), color_actions)
         self.form.addRow(QLabel("Mask actions"), invert_button)
         self.form.addRow(QLabel(""), reset_button)
 
@@ -390,6 +428,77 @@ class InspectorDock(QDockWidget):
             lambda document, image_sources: add_instance_color(
                 document, image_sources, instance_id, op_id=op_id,
                 saturation=1.0, brightness=1.0, contrast=1.0,
+            )
+        )
+
+    def _color_match(self) -> None:
+        """Author a restrained non-destructive patch-based color correction."""
+        window = self._main_window()
+        instance_id = self._instance_id
+        if window is None or instance_id is None:
+            return
+        source_path = window.canvas.scene_model._resolve_image_path(instance_id)
+        target_image = getattr(window.canvas.scene_model, "_committed_reference", None)
+        if source_path is None or not Path(source_path).exists() or target_image is None:
+            window.statusBar().showMessage("Color Match needs a selected layer and a rendered reference.", 5000)
+            return
+        with Image.open(source_path) as raw:
+            source_image = raw.convert("RGBA")
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Color Match")
+        form = QFormLayout(dialog)
+        source_x = self._spin(0.0, float(max(1, source_image.width - 1)), 1.0, source_image.width / 2.0)
+        source_y = self._spin(0.0, float(max(1, source_image.height - 1)), 1.0, source_image.height / 2.0)
+        target_x = self._spin(0.0, float(max(1, target_image.width - 1)), 1.0, target_image.width / 2.0)
+        target_y = self._spin(0.0, float(max(1, target_image.height - 1)), 1.0, target_image.height / 2.0)
+        strength = self._spin(0.0, 1.0, 0.05, 0.75)
+        preserve = QCheckBox("Preserve luminance")
+        preserve.setChecked(True)
+        form.addRow("Source X", source_x)
+        form.addRow("Source Y", source_y)
+        form.addRow("Target X", target_x)
+        form.addRow("Target Y", target_y)
+        form.addRow("Strength", strength)
+        form.addRow("", preserve)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
+        preview_button = buttons.addButton("Preview", QDialogButtonBox.ButtonRole.ActionRole)
+        def match_params():
+            source_rgb = tuple(source_image.getpixel((round(source_x.value()), round(source_y.value())))[:3])
+            target_rgb = tuple(target_image.getpixel((round(target_x.value()), round(target_y.value())))[:3])
+            return color_match_params(
+                source_rgb,
+                target_rgb,
+                strength=strength.value(),
+                preserve_luminance=preserve.isChecked(),
+            )
+        preview_button.clicked.connect(
+            lambda: window.canvas.scene_model.preview_color_match(instance_id, match_params())
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        document = window.document
+        existing = {op.get("id") for op in document.instances[instance_id].visual_ops}
+        op_id = "color_match"
+        index = 2
+        while op_id in existing:
+            op_id = f"color_match_{index}"
+            index += 1
+        window.run_command(
+            lambda document, image_sources: add_instance_color_match(
+                document,
+                image_sources,
+                instance_id,
+                op_id=op_id,
+                source_image=source_image,
+                target_image=target_image,
+                source_point=(source_x.value(), source_y.value()),
+                target_point=(target_x.value(), target_y.value()),
+                strength=strength.value(),
+                preserve_luminance=preserve.isChecked(),
             )
         )
 

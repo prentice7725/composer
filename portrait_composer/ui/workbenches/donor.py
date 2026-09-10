@@ -144,6 +144,14 @@ class DonorWorkbench(QWidget):
         self.expression_preview_button.setAccessibleName("Preview face expression set")
         self.expression_preview_button.clicked.connect(self._preview_expression_set)
         slot_layout.addWidget(self.expression_preview_button, row, 3, 1, 2)
+        self.blink_test_button = QPushButton("Blink Test")
+        self.blink_test_button.setAccessibleName("Preview blink test")
+        self.blink_test_button.clicked.connect(lambda: self._preview_articulation("blink"))
+        slot_layout.addWidget(self.blink_test_button, row + 1, 3)
+        self.talk_test_button = QPushButton("Talk Test")
+        self.talk_test_button.setAccessibleName("Preview talk test")
+        self.talk_test_button.clicked.connect(lambda: self._preview_articulation("talk"))
+        slot_layout.addWidget(self.talk_test_button, row + 1, 4)
         outer.addWidget(slot_box)
 
         form_panel = QWidget()
@@ -290,6 +298,35 @@ class DonorWorkbench(QWidget):
         self.main_window.statusBar().showMessage(
             f"Expression set preview: {assigned} face-expression slot(s) assigned. Runtime binding remains AutoRig-owned.",
             6000,
+        )
+
+    def _preview_articulation(self, kind: str) -> None:
+        """Preview a closed-eye or speaking-mouth state without committing."""
+        document = self.main_window.document
+        if document is None:
+            return
+        family, states = (
+            ("eyes", ("closed",)) if kind == "blink" else ("mouth", ("a", "i", "u", "e", "o"))
+        )
+        entries = document.donor_slots.get(family, {})
+        chosen = next(
+            (entries.get(state, {}).get("source_instance") for state in states if isinstance(entries.get(state), dict)),
+            None,
+        )
+        if chosen is None:
+            self.main_window.statusBar().showMessage(f"Assign a {kind} donor before running the test.", 5000)
+            return
+        preferred = "eyes_state" if family == "eyes" else "mouth_state"
+        variant_set_id = preferred if preferred in document.variant_sets else next(
+            (vs_id for vs_id, vs in document.variant_sets.items() if chosen in vs.get("members", [])),
+            None,
+        )
+        if variant_set_id is None:
+            self.main_window.statusBar().showMessage(f"No {family} VariantSet is available for the test.", 5000)
+            return
+        self.main_window.canvas.scene_model.preview_variant_selection({variant_set_id: chosen})
+        self.main_window.statusBar().showMessage(
+            f"{kind.title()} Test preview is transient; document state was not changed.", 5000
         )
 
     # -- import / clear ---------------------------------------------------

@@ -31,6 +31,9 @@ from PySide6.QtWidgets import (
 
 from ..models.assembly_tree import INSTANCE_MIME_TYPE
 
+ARTICULATION_VARIANT_SETS = {"eye_state", "eyes_state", "mouth_state", "mouth_viseme"}
+EMOTION_FAMILIES = ("eye_form", "brow_state", "mouth_form", "overlay_state")
+
 THUMBNAIL_SIZE = 64
 
 
@@ -232,7 +235,14 @@ class _ExpressionEditor(QWidget):
             return
         preset = document.expressions.get(self._preset_id) if self._preset_id else None
         selections = dict(preset["variants"]) if preset else {}
-        for vs_id, vs in document.variant_sets.items():
+        # Articulation is runtime-driven and must not be silently captured by
+        # an emotion preset.  Keep those slots on the donor board; this editor
+        # authors only emotional channels and preserves any legacy picks.
+        visible_sets = {
+            vs_id: vs for vs_id, vs in document.variant_sets.items()
+            if vs_id not in ARTICULATION_VARIANT_SETS
+        }
+        for vs_id, vs in visible_sets.items():
             row_widget = QWidget()
             row = QHBoxLayout(row_widget)
             row.setContentsMargins(0, 0, 0, 0)
@@ -258,10 +268,21 @@ class _ExpressionEditor(QWidget):
         if not document.variant_sets:
             self.status_label.setText("No VariantSets yet -- add one above first.")
         else:
-            self.status_label.setText(f"Editing: {self._preset_id}" if self._preset_id else "New Preset… to start one.")
+            preservation = " · blink/viseme preserved by default"
+            self.status_label.setText(
+                (f"Editing: {self._preset_id}{preservation}" if self._preset_id else "New Preset… to start one.")
+            )
 
     def _current_variants(self) -> dict[str, str]:
-        return {vs_id: combo.currentData() for vs_id, combo in self._dropdowns.items()}
+        variants = {vs_id: combo.currentData() for vs_id, combo in self._dropdowns.items()}
+        # A legacy preset may contain articulation selections.  They are not
+        # editable in the emotion UI, but saving it must not erase them.
+        document = self.main_window.document
+        preset = document.expressions.get(self._preset_id, {}) if document and self._preset_id else {}
+        for vs_id, member_id in (preset.get("variants", {}) if isinstance(preset, dict) else {}).items():
+            if vs_id in ARTICULATION_VARIANT_SETS:
+                variants.setdefault(vs_id, member_id)
+        return variants
 
     def _new_preset(self) -> None:
         document = self.main_window.document
@@ -273,7 +294,14 @@ class _ExpressionEditor(QWidget):
             return
         from ..commands import save_expression
 
-        variants = {vs_id: vs.get("active") for vs_id, vs in document.variant_sets.items()}
+        variants = {
+            vs_id: vs.get("active")
+            for vs_id, vs in document.variant_sets.items()
+            if vs_id not in ARTICULATION_VARIANT_SETS
+        }
+        if not variants:
+            self.status_label.setText("Create an emotion family first; blink and viseme stay on the articulation board.")
+            return
         if self.main_window.run_command(lambda doc, srcs: save_expression(doc, srcs, name, variants)):
             self.preset_selector.setCurrentText(name)
 
@@ -307,6 +335,12 @@ class VariantWorkbench(QWidget):
         new_set_button.setAccessibleName("New variant set from selection")
         new_set_button.clicked.connect(self._new_variant_set)
         header.addWidget(new_set_button)
+        for family in EMOTION_FAMILIES:
+            button = QPushButton(f"+ {family}")
+            button.setAccessibleName(f"Add {family} emotion family")
+            button.setToolTip("Add the selected layer to this emotion channel")
+            button.clicked.connect(lambda _checked=False, name=family: self._add_emotion_family(name))
+            header.addWidget(button)
         outer.addLayout(header)
 
         self.sets_area = QScrollArea()
@@ -358,5 +392,21 @@ class VariantWorkbench(QWidget):
         self.main_window.run_command(
             lambda document, image_sources: add_variant_member(
                 document, image_sources, name, instance_id, default=True
+            )
+        )
+
+    def _add_emotion_family(self, family: str) -> None:
+        selected = self.main_window.selection_model.instance_ids
+        if len(selected) != 1:
+            self.main_window.statusBar().showMessage(
+                "Select exactly one layer to add to an emotion family.", 5000
+            )
+            return
+        from ..commands import add_variant_member
+
+        instance_id = selected[0]
+        self.main_window.run_command(
+            lambda document, image_sources: add_variant_member(
+                document, image_sources, family, instance_id, default=family not in document.variant_sets
             )
         )

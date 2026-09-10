@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portrait-composer/schemas/portrait-rig-bundle-v0.3.schema.json",
+  "title": "Portrait Composer Rig Bundle v0.3",
+  "type": "object",
+  "required": ["format", "version", "canvas", "layers", "draw_order", "instances", "assets", "rig_intent", "expression_intent"],
+  "properties": {
+    "format": {"const": "portrait-rig-bundle"},
+    "version": {"const": "0.3"},
+    "canvas": {"type": "object"},
+    "layers": {"type": "array", "items": {"type": "string"}},
+    "draw_order": {"type": "array", "items": {"type": "string"}},
+    "instances": {"type": "object"},
+    "assets": {"type": "object"},
+    "rig_intent": {"type": "object"},
+    "expression_intent": {"$ref": "#/$defs/expressionIntent"}
+  },
+  "$defs": {
+    "expressionIntent": {
+      "type": "object",
+      "required": ["profile", "articulation", "emotion_channels", "presets"],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {"const": "face_expression_core_v2"},
+        "articulation": {"type": "object"},
+        "emotion_channels": {"type": "object"},
+        "presets": {"type": "object"}
+      }
+    }
+  }
+}

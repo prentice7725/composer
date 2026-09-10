@@ -40,6 +40,7 @@ from ...bake import BLOCK, CAN_BAKE, WARN, analyze_bake
 from ...bake_plan import PLAN_STATUSES
 from ...instances import Transform
 from ...profiles import BakeCandidate, FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile
+from ...rig_bundle import validate_rig_export
 from ...seam_repair import BAKE_MODES, BAKE_PROFILES, SEAM_CLEANUP_MODES, normalize_seam_policy, resolve_bake_mode
 from ..commands import analyze_logical_bake_plan, apply_logical_plan, bake_candidate, create_logical_bake_plan
 
@@ -617,7 +618,25 @@ class BakeWorkbench(QWidget):
         self.quick_bake_button.setAccessibleName("Quick bake selected layers")
         self.quick_bake_button.clicked.connect(self._quick_bake)
         simple_layout.addWidget(self.quick_bake_button)
+        self.export_rig_button = QPushButton("Export Rig Bundle…")
+        self.export_rig_button.setAccessibleName("Export rig bundle from prepare rig")
+        self.export_rig_button.setToolTip("Review readiness and export the visible canonical layers to AutoRig")
+        self.export_rig_button.clicked.connect(self.main_window.export_rig_bundle_dialog)
+        simple_layout.addWidget(self.export_rig_button)
         outer.addWidget(self.simple_board)
+
+        self.readiness_box = QFrame()
+        self.readiness_box.setFrameShape(QFrame.Shape.StyledPanel)
+        readiness_layout = QHBoxLayout(self.readiness_box)
+        readiness_layout.addWidget(QLabel("Readiness"))
+        self.readiness_labels = {}
+        for key, title in (("torso", "Torso"), ("expressions", "Expressions"), ("autorig", "AutoRig Preflight")):
+            label = QLabel(f"{title}: NEEDS REVIEW")
+            label.setAccessibleName(f"Prepare Rig {key} readiness")
+            self.readiness_labels[key] = label
+            readiness_layout.addWidget(label)
+        readiness_layout.addStretch(1)
+        outer.addWidget(self.readiness_box)
 
         self.plan_box = QFrame()
         self.plan_box.setFrameShape(QFrame.Shape.StyledPanel)
@@ -757,6 +776,7 @@ class BakeWorkbench(QWidget):
         self.advanced_button.setChecked(not simple)
         self.bake_selected_button.setVisible(not simple)
         self.simple_board.setVisible(simple)
+        self.readiness_box.setVisible(simple)
         self.plan_box.setVisible(not simple)
         self.plan_options_widget.setVisible(not simple)
         self.plan_row_widget.setVisible(not simple)
@@ -779,6 +799,7 @@ class BakeWorkbench(QWidget):
         if document is None:
             self.simple_sources_label.setText("No document")
             self.quick_bake_button.setEnabled(False)
+            self._update_readiness(None)
             return
         auto_sources = _auto_torso_sources(document)
         if auto_sources:
@@ -808,6 +829,32 @@ class BakeWorkbench(QWidget):
             )
         semantic = self.simple_result_combo.currentText().strip()
         self.quick_bake_button.setEnabled(len(effective) >= 2 and bool(semantic))
+        self._update_readiness(document, torso_sources=auto_sources)
+
+    def _update_readiness(self, document, *, torso_sources: list[str] | None = None) -> None:
+        if document is None:
+            return
+        torso_sources = torso_sources if torso_sources is not None else _auto_torso_sources(document)
+        baked_torso = any(
+            _label_for(document, instance_id) == "topwear_with_arms" and instance.visible
+            for instance_id, instance in document.instances.items()
+        ) or any(
+            plan.get("status") == "BAKED" and plan.get("result_semantic") == "topwear_with_arms"
+            for plan in document.bake_plans.values()
+        )
+        torso_status = "READY" if baked_torso else "NEEDS REVIEW" if torso_sources else "BLOCKED"
+        slots = document.donor_slots or {}
+        eyes = slots.get("eyes", {})
+        mouth = slots.get("mouth", {})
+        expression_status = "READY" if eyes.get("open") and eyes.get("closed") and mouth.get("closed") else "NEEDS REVIEW"
+        errors = validate_rig_export(document, self.main_window.image_sources)
+        autorig_status = "BLOCKED" if errors else "READY"
+        values = {"torso": torso_status, "expressions": expression_status, "autorig": autorig_status}
+        for key, label in self.readiness_labels.items():
+            title = {"torso": "Torso", "expressions": "Expressions", "autorig": "AutoRig Preflight"}[key]
+            label.setText(f"{title}: {values[key]}")
+            color = {"READY": "#7fffa0", "NEEDS REVIEW": "#ffd166", "BLOCKED": "#ff7b7b"}[values[key]]
+            label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
     def _refresh_plan_list(self) -> None:
         document = self.main_window.document

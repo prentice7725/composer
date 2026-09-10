@@ -40,7 +40,7 @@ from .donors import DonorDriftError, DonorError, DonorImportResult, import_donor
 from .donor_slots import DONOR_PROFILE, EYE_SLOTS, MOUTH_SLOTS, default_donor_slots, set_donor_slot, slot_for_donor_semantic
 from .rig_bundle import RigBundleError, export_rig_bundle, validate_exported_rig_bundle, validate_rig_export
 from .remap import apply_remap_resolution
-from .expressions import ExpressionError, apply_expression_preset, create_expression_preset
+from .expressions import ExpressionError, apply_expression_preset, build_expression_intent, create_expression_preset
 from .instances import LayerInstance, Transform
 from .profiles import FULL_MOTION, PORTRAIT_RIG, PORTRAIT_STATIC, analyze_profile, apply_candidate
 from .rig_intent import ATTACHMENT_MODES, DEFORMATION_SCOPES, add_attachment, set_deformation_scope
@@ -59,6 +59,7 @@ from .sources import SourceAsset, SourceBinding, SourceRevision
 from .seam_repair import BAKE_MODES, BAKE_PROFILES, SEAM_CLEANUP_MODES
 from .transform_ops import TransformOpError, align_instance, fit_instance, flip_transform, nudge_transform, reset_transform, set_uniform_scale
 from .visual_ops import VisualOpError, add_visual_op, apply_visual_ops
+from .color_match import ColorMatchError, color_match_params, create_color_match_op, sample_patch
 
 __all__ = [
     "AssemblyDocument",
@@ -120,6 +121,7 @@ __all__ = [
     "slot_for_donor_semantic",
     "create_expression_preset",
     "apply_expression_preset",
+    "build_expression_intent",
     "ExpressionError",
     "TransformOpError",
     "set_uniform_scale",
@@ -131,6 +133,10 @@ __all__ = [
     "VisualOpError",
     "add_visual_op",
     "apply_visual_ops",
+    "ColorMatchError",
+    "sample_patch",
+    "color_match_params",
+    "create_color_match_op",
     "BAKE_MODES",
     "SEAM_CLEANUP_MODES",
     "BAKE_PROFILES",

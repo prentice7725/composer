@@ -21,6 +21,7 @@ from ..donor_slots import clear_donor_slot, set_donor_slot
 from ..expressions import apply_expression_preset, create_expression_preset, update_expression_preset
 from ..profiles import apply_candidate as _apply_bake_candidate
 from ..visual_ops import add_visual_op, reset_visual_ops, update_visual_op
+from ..color_match import create_color_match_op
 from ..mask_ops import edit_mask_stroke
 from ..transform_ops import (
     align_instance,
@@ -85,6 +86,30 @@ def add_instance_quad_warp(document, image_sources, instance_id: str, *, op_id: 
 
 def add_instance_color(document, image_sources, instance_id: str, *, op_id: str, **params) -> None:
     add_visual_op(document, instance_id, {"id": op_id, "type": "color", "params": dict(params)})
+
+
+def add_instance_color_match(
+    document,
+    image_sources,
+    instance_id: str,
+    *,
+    op_id: str,
+    source_image,
+    target_image,
+    source_point,
+    target_point,
+    **options,
+) -> None:
+    create_color_match_op(
+        document,
+        instance_id,
+        source_image=source_image,
+        target_image=target_image,
+        source_point=source_point,
+        target_point=target_point,
+        op_id=op_id,
+        **options,
+    )
 
 
 def update_instance_visual_op(document, image_sources, instance_id: str, *, op_id: str, params: dict) -> None:

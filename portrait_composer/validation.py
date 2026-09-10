@@ -266,6 +266,15 @@ def validate(document: "AssemblyDocument", production: bool = False) -> Validati
     # ExpressionPreset is a thin bundle of VariantSet members.  Keep it
     # explicit in the document, but never turn it into a new runtime system.
     for preset_id, preset in getattr(document, "expressions", {}).items():
+        if not isinstance(preset, dict):
+            errors.append(f"expression {preset_id!r}: must be an object")
+            continue
+        metadata = preset.get("metadata", {})
+        if metadata and not isinstance(metadata, dict):
+            errors.append(f"expression {preset_id!r}: metadata must be an object")
+        preserve = metadata.get("preserve", ["blink", "viseme"]) if isinstance(metadata, dict) else []
+        if not isinstance(preserve, list) or any(item not in {"blink", "viseme"} for item in preserve):
+            errors.append(f"expression {preset_id!r}: metadata.preserve must contain only blink/viseme")
         for set_id, member in preset.get("variants", {}).items():
             variant_set = document.variant_sets.get(set_id)
             if variant_set is None:
