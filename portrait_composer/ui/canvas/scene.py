@@ -245,6 +245,24 @@ class CanvasScene(QGraphicsScene):
         else:  # composite
             self._set_preview_pixmap(replaced)
 
+    def preview_derived_pair(self, target_tag: str, left_path: Path, right_path: Path) -> None:
+        """Preview both producer-side geometric derivatives transiently."""
+        if self._reference_item is None or self._committed_reference is None:
+            return
+        self._stop_flicker()
+        instance_id = f"{target_tag}__instance"
+        existing = self.document.instances.get(instance_id) if self.document is not None else None
+        transform = existing.transform if existing is not None else Transform()
+        preview = self._committed_reference.copy()
+        try:
+            for path in (left_path, right_path):
+                with Image.open(path) as raw:
+                    positioned, offset = _positioned(raw.convert("RGBA"), transform)
+                preview.alpha_composite(positioned, dest=offset)
+        except (FileNotFoundError, OSError):
+            return
+        self._set_preview_pixmap(preview)
+
     def _flicker_tick(self) -> None:
         if self._flicker_frames is None:
             return

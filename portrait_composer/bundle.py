@@ -147,6 +147,7 @@ class PortraitBundle:
     validation: dict
     source: dict
     warnings: list  # import-time warnings surfaced from the bundle's own diagnostics
+    derived: dict = field(default_factory=dict)
 
     def layer_path(self, layer: PortraitBundleLayer) -> Path:
         return self.root / layer.path
@@ -154,6 +155,17 @@ class PortraitBundle:
     @property
     def source_identity(self) -> Optional[str]:
         return self.generation.get("source_identity")
+
+    def derived_candidates(self, kind: str = "left_right") -> list:
+        """Return producer derivatives as transient Composer candidates.
+
+        Candidates are intentionally not ``LayerInstance`` objects.  Reading a
+        bundle must never mutate the document or silently adopt producer
+        output; callers must explicitly perform an adoption transaction.
+        """
+        from .derived import candidates_from_bundle
+
+        return candidates_from_bundle(self, kind=kind)
 
 
 def source_id_for(bundle: PortraitBundle) -> str:
@@ -171,6 +183,91 @@ def _require(manifest: dict, key: str, manifest_path: Path) -> object:
     if key not in manifest:
         raise BundleError(f"{manifest_path}: missing required field {key!r}")
     return manifest[key]
+
+
+def _bundle_relative_artifact(root: Path, relative: object, *, canonical_paths: set[str], context: str) -> str:
+    """Validate and return one safe, existing Bundle-relative artifact path."""
+    if not isinstance(relative, str) or not relative or "\\" in relative:
+        raise BundleError(f"{root / 'manifest.json'}: {context} path must be Bundle-relative")
+    candidate = Path(relative)
+    if candidate.is_absolute() or candidate.drive or any(part in {"", ".", ".."} for part in relative.split("/")):
+        raise BundleError(f"{root / 'manifest.json'}: {context} path traversal is forbidden: {relative!r}")
+    normalized = candidate.as_posix()
+    if not normalized.startswith("derived/"):
+        raise BundleError(f"{root / 'manifest.json'}: {context} must live under derived/: {relative!r}")
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as exc:
+        raise BundleError(f"{root / 'manifest.json'}: {context} path escapes Bundle: {relative!r}") from exc
+    if normalized in canonical_paths or resolved in {(root / value).resolve() for value in canonical_paths}:
+        raise BundleError(f"{root / 'manifest.json'}: {context} aliases a canonical layer: {relative!r}")
+    if not resolved.is_file():
+        raise BundleError(f"{root / 'manifest.json'}: derived artifact missing: {relative}")
+    return normalized
+
+
+def _validate_derived_block(value: object, root: Path, *, layers_raw: dict) -> dict:
+    """Validate the optional producer-derived contract without reading it."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise BundleError(f"{root / 'manifest.json'}: derived must be an object")
+    source_stage = value.get("source_stage")
+    if source_stage != _CANONICAL_STAGE:
+        raise BundleError(
+            f"{root / 'manifest.json'}: derived.source_stage must be {_CANONICAL_STAGE!r}"
+        )
+    canonical_paths = {
+        str(entry.get("path"))
+        for entry in layers_raw.values()
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+    result = {"source_stage": source_stage}
+    for kind in ("left_right", "depth"):
+        if kind not in value:
+            raise BundleError(f"{root / 'manifest.json'}: derived missing {kind!r} block")
+        block = value[kind]
+        if not isinstance(block, dict) or block.get("status") not in {"computed", "not_computed"}:
+            raise BundleError(f"{root / 'manifest.json'}: derived.{kind} has invalid status")
+        paths = block.get("paths", {})
+        if not isinstance(paths, dict):
+            raise BundleError(f"{root / 'manifest.json'}: derived.{kind}.paths must be an object")
+        if block["status"] == "not_computed" and paths:
+            raise BundleError(f"{root / 'manifest.json'}: derived.{kind}.paths must be empty when not_computed")
+        if block["status"] == "computed" and not paths:
+            raise BundleError(f"{root / 'manifest.json'}: derived.{kind} computed without artifacts")
+        if block["status"] == "not_computed" and paths:
+            raise BundleError(f"{root / 'manifest.json'}: derived.{kind} not_computed must have empty paths")
+        checked = {}
+        for semantic, entry in paths.items():
+            if not isinstance(semantic, str) or not semantic:
+                raise BundleError(f"{root / 'manifest.json'}: derived.{kind} has invalid semantic key")
+            if kind == "left_right":
+                if not isinstance(entry, dict):
+                    raise BundleError(f"{root / 'manifest.json'}: derived.left_right.{semantic} must be an object")
+                if set(entry) != {"left", "right"}:
+                    raise BundleError(
+                        f"{root / 'manifest.json'}: derived.left_right.{semantic} must contain left and right"
+                    )
+                if set(entry) != {"left", "right"}:
+                    raise BundleError(
+                        f"{root / 'manifest.json'}: derived.left_right.{semantic} must contain left and right"
+                    )
+                checked[semantic] = {
+                    member: _bundle_relative_artifact(
+                        root, rel, canonical_paths=canonical_paths,
+                        context=f"derived.{kind}.{semantic}.{member}"
+                    )
+                    for member, rel in entry.items()
+                }
+            else:
+                checked[semantic] = _bundle_relative_artifact(
+                    root, entry, canonical_paths=canonical_paths,
+                    context=f"derived.{kind}.{semantic}"
+                )
+        result[kind] = {"status": block["status"], "paths": checked}
+    return result
 
 
 def read_portrait_bundle(path: Path) -> PortraitBundle:
@@ -220,9 +317,9 @@ def read_portrait_bundle(path: Path) -> PortraitBundle:
     source = dict(manifest.get("source", {}))
     diagnostics = dict(manifest.get("diagnostics", {}))
 
-    raw_layers = dict(manifest.get("raw_layers", {}))  # forensic only -- never harvested
-
     layers_raw = dict(_require(manifest, "layers", manifest_path))
+    raw_layers = dict(manifest.get("raw_layers", {}))  # forensic only -- never harvested
+    derived = _validate_derived_block(manifest.get("derived"), path, layers_raw=layers_raw)
     layers: list[PortraitBundleLayer] = []
     for tag, entry in layers_raw.items():
         if tag in _FORBIDDEN_TAGS:
@@ -282,6 +379,7 @@ def read_portrait_bundle(path: Path) -> PortraitBundle:
         validation=validation,
         source=source,
         warnings=warnings,
+        derived=derived,
     )
 
 

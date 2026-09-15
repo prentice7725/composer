@@ -48,6 +48,7 @@ from .session import CONTEXTS, SelectionModel, UISessionState, sync_session_sele
 from .i18n import LOCALES, install_translator
 from .workbenches.donor import DonorWorkbench
 from .workbenches.harvest import HarvestWorkbench
+from .workbenches.derived import DerivedWorkbench
 from .workbenches.bake import BakeWorkbench
 from .workbenches.rig_intent import RigIntentWorkbench
 from .workbenches.variants import VariantWorkbench
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
         self._portrait_workspace = PortraitInputWorkspace()
         self.import_warnings: list[str] = []
         self.harvest_source_pool = {}
+        self.producer_bundle_pool = {}
         self.diagnostics: list[Diagnostic] = []
 
         self.canvas = CanvasView(self.selection_model, self.session, self)
@@ -94,6 +96,7 @@ class MainWindow(QMainWindow):
         self.workbench_placeholder.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.workbench_placeholder.setMargin(12)
         self.harvest_workbench = HarvestWorkbench(self)
+        self.derived_workbench = DerivedWorkbench(self)
         self.variant_workbench = VariantWorkbench(self)
         self.donor_workbench = DonorWorkbench(self)
         self.rig_intent_workbench = RigIntentWorkbench(self)
@@ -107,6 +110,7 @@ class MainWindow(QMainWindow):
         self.workbench.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.workbench.addWidget(self.workbench_placeholder)
         self.workbench.addWidget(self.harvest_workbench)
+        self.workbench.addWidget(self.derived_workbench)
         self.workbench.addWidget(self.variant_workbench)
         self.workbench.addWidget(self.donor_workbench)
         self.workbench.addWidget(self.rig_intent_workbench)
@@ -186,7 +190,7 @@ class MainWindow(QMainWindow):
             button.setToolTip(self.tr({
                 "COMPOSE": "Composition and source authoring",
                 "EXPRESSIONS": "Author eye and mouth expression donors",
-                "PREPARE RIG": "Prepare torso bake and rig export",
+                "PREPARE RIG": "Preflight and rig export",
             }[label]))
             button.setAccessibleName(f"{label} production workflow")
             button.clicked.connect(lambda checked, c=context: self._enter_production_context(c))
@@ -199,8 +203,12 @@ class MainWindow(QMainWindow):
         self._set_workspace_axis("COMPOSE")
 
     def _enter_production_context(self, context: str) -> None:
-        """Enter one of the compact production workflows."""
-        self.set_context(context, production=True)
+        """Enter a compact production workflow.
+
+        PREPARE RIG opens on preflight/export.  Legacy torso consolidation is
+        still available by explicitly choosing the Compatibility workflow.
+        """
+        self.set_context(context, production=(context == "DONOR"))
         if context == "DONOR":
             self.donor_workbench._set_advanced(False)
 
@@ -478,7 +486,7 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.restoreState(state)
         context = self.settings.value("last_context", "ASSEMBLE")
-        workflow = str(self.settings.value("bake_workflow", "simple") or "simple")
+        workflow = str(self.settings.value("bake_workflow", "advanced") or "advanced")
         if context in CONTEXTS:
             self.set_context(str(context), production=(str(context) == "BAKE" and workflow == "simple"))
         axis = str(self.settings.value("workspace_axis", self.session.workspace_axis) or "COMPOSE")
@@ -545,6 +553,12 @@ class MainWindow(QMainWindow):
         if context == "HARVEST" and self.harvest_source_pool:
             self.harvest_workbench.refresh()
             self.workbench.setCurrentWidget(self.harvest_workbench)
+        elif context == "ASSEMBLE" and self.document is not None and self.producer_bundle_pool:
+            self.derived_workbench.refresh()
+            if self.derived_workbench.rows:
+                self.workbench_dock.show()
+                self.workbench_dock.raise_()
+                self.workbench.setCurrentWidget(self.derived_workbench)
         elif context == "VARIANTS" and self.document is not None:
             self.variant_workbench.refresh()
             self.workbench.setCurrentWidget(self.variant_workbench)
@@ -594,11 +608,13 @@ class MainWindow(QMainWindow):
                 "alpha": "straight",
             }
         self.harvest_source_pool = {}
+        self.producer_bundle_pool = {}
         self._display_document(document, {}, Path("."), source_map=False)
         self._set_workbench_message("ASSEMBLE Workbench\nNew Assembly is ready for input.")
 
     def load_bundle(self, bundle_path: Path) -> None:
         bundle_path = Path(bundle_path)
+        self.producer_bundle_pool = {}
         document = read_assembly_bundle(bundle_path)
         layers_dir = assembly_layers_dir(bundle_path)
         image_sources = {
@@ -659,6 +675,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_portrait_import(prepared.bundle, warnings):
             return
         self.harvest_source_pool = {}
+        self.producer_bundle_pool = {prepared.label: prepared.bundle}
         self._display_document(
             document,
             image_sources,
@@ -671,6 +688,10 @@ class MainWindow(QMainWindow):
             "ASSEMBLE Workbench\n"
             f"Imported {prepared.label}; the Assembly is ready to edit and save."
         )
+        self.derived_workbench.refresh()
+        if self.derived_workbench.rows:
+            self.workbench_dock.show()
+            self.workbench.setCurrentWidget(self.derived_workbench)
         self._remember_recent(source_path)
 
     def reimport_portrait_bundle_dialog(self) -> None:
@@ -803,6 +824,7 @@ class MainWindow(QMainWindow):
                 suffix += 1
             pool[label] = item.bundle
         self.harvest_source_pool = pool
+        self.producer_bundle_pool = dict(pool)
         self.session.harvest_run_labels = list(pool)
         self.set_context("HARVEST")
         for source_path in source_paths:
@@ -1079,6 +1101,8 @@ class MainWindow(QMainWindow):
         current = self.workbench.currentWidget()
         if current is self.harvest_workbench:
             self.harvest_workbench.refresh()
+        elif current is self.derived_workbench:
+            self.derived_workbench.refresh()
         elif current is self.variant_workbench:
             self.variant_workbench.refresh()
         elif current is self.donor_workbench:

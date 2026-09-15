@@ -138,7 +138,10 @@ class _CandidateCard(QFrame):
 
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
-        header.addWidget(QLabel(f"Candidate: {candidate.label}"))
+        candidate_title = f"Candidate: {candidate.label}"
+        if getattr(candidate, "compatibility_only", False):
+            candidate_title += " · Compatibility fallback"
+        header.addWidget(QLabel(candidate_title))
         verdict_label = QLabel(VERDICT_TEXT.get(candidate.analysis.verdict, candidate.analysis.verdict))
         verdict_label.setStyleSheet("font-weight: bold;")
         header.addWidget(verdict_label)
@@ -565,7 +568,7 @@ class BakeWorkbench(QWidget):
         self.bake_selected_button.setToolTip("Analyze the currently selected Tree layers as one bake candidate")
         self.bake_selected_button.clicked.connect(self._analyze_selected)
         top.addWidget(self.bake_selected_button)
-        self.advanced_button = QPushButton("Advanced Options")
+        self.advanced_button = QPushButton("Advanced / Compatibility")
         self.advanced_button.setCheckable(True)
         self.advanced_button.setAccessibleName("Show advanced bake options")
         self.advanced_button.clicked.connect(self._toggle_advanced)
@@ -589,6 +592,14 @@ class BakeWorkbench(QWidget):
         self.simple_board = QFrame()
         self.simple_board.setFrameShape(QFrame.Shape.StyledPanel)
         simple_layout = QHBoxLayout(self.simple_board)
+        compatibility_note = QLabel(
+            "Compatibility fallback. Prefer producer left/right derivatives when available."
+        )
+        compatibility_note.setWordWrap(True)
+        compatibility_note.setToolTip(
+            "This merge removes independent layer control; use producer left/right derivatives first."
+        )
+        simple_layout.addWidget(compatibility_note)
         simple_layout.addWidget(QLabel("Sources"))
         self.simple_sources_label = QLabel("Select at least two layers")
         self.simple_sources_label.setMinimumWidth(220)
@@ -614,8 +625,12 @@ class BakeWorkbench(QWidget):
         self.simple_after_button.clicked.connect(lambda: self._quick_preview("after"))
         simple_layout.addWidget(self.simple_before_button)
         simple_layout.addWidget(self.simple_after_button)
-        self.quick_bake_button = QPushButton("Bake for Rig")
-        self.quick_bake_button.setAccessibleName("Quick bake selected layers")
+        self.quick_bake_button = QPushButton("Legacy Torso Merge")
+        self.quick_bake_button.setAccessibleName("Legacy torso merge compatibility action")
+        self.quick_bake_button.setToolTip(
+            "Compatibility fallback. This merge removes independent layer control. "
+            "Prefer producer left/right derivatives when available."
+        )
         self.quick_bake_button.clicked.connect(self._quick_bake)
         simple_layout.addWidget(self.quick_bake_button)
         self.export_rig_button = QPushButton("Export Rig Bundle…")

@@ -36,6 +36,7 @@ from .bake_plan import (
     update_bake_plan,
 )
 from .document import AssemblyDocument, DuplicateIdError, TransactionValidationError
+from .derived import DerivedCandidate, DerivedCandidateError, adopt_derived_split, revert_derived_split
 from .donors import DonorDriftError, DonorError, DonorImportResult, import_donor
 from .donor_slots import DONOR_PROFILE, EYE_SLOTS, MOUTH_SLOTS, default_donor_slots, set_donor_slot, slot_for_donor_semantic
 from .rig_bundle import RigBundleError, export_rig_bundle, validate_exported_rig_bundle, validate_rig_export
@@ -63,6 +64,10 @@ from .color_match import ColorMatchError, color_match_params, create_color_match
 
 __all__ = [
     "AssemblyDocument",
+    "DerivedCandidate",
+    "DerivedCandidateError",
+    "adopt_derived_split",
+    "revert_derived_split",
     "TransactionValidationError",
     "DuplicateIdError",
     "AssetDefinition",

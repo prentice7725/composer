@@ -30,6 +30,7 @@ from typing import Optional
 
 from .assets import AssetDefinition
 from .bundle import PortraitBundle, source_id_for
+from .derived import DerivedCandidate, adopt_derived_split, revert_derived_split
 from .document import AssemblyDocument
 from .instances import LayerInstance, Transform
 from .sources import SourceAsset, SourceBinding, content_hash
@@ -61,6 +62,7 @@ def identity_assembly(bundle: PortraitBundle) -> tuple[AssemblyDocument, dict, l
                 "generation": dict(bundle.generation),
                 "canvas": dict(bundle.canvas),
                 "validation": dict(bundle.validation),
+                "derived": dict(bundle.derived),
             },
         )
 
@@ -175,6 +177,7 @@ def harvest_assembly(bundles: dict, selections: dict) -> tuple[AssemblyDocument,
                         "generation": dict(bundle.generation),
                         "canvas": dict(bundle.canvas),
                         "validation": dict(bundle.validation),
+                        "derived": dict(bundle.derived),
                     },
                 )
                 warnings.extend(f"[{run_label}] {w}" for w in bundle.warnings)
@@ -281,6 +284,7 @@ def harvest_instance(
                     "generation": dict(bundle.generation),
                     "canvas": bundle_canvas,
                     "validation": dict(bundle.validation),
+                    "derived": dict(bundle.derived),
                 },
             )
 

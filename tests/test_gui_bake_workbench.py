@@ -316,9 +316,11 @@ def test_production_prepare_rig_auto_detects_garment_pair(window, tmp_path: Path
 
     window._enter_production_context("BAKE")
     wb = window.bake_workbench
-    assert wb.workflow_mode.currentData() == "simple"
+    # PREPARE RIG now opens on preflight/export; torso merge is an explicit
+    # Advanced/Compatibility action rather than the production default.
+    assert wb.workflow_mode.currentData() == "advanced"
     assert wb._simple_sources() == ["handwear__instance", "topwear__instance"]
-    assert not wb.bake_selected_button.isVisible()
+    assert not wb.bake_selected_button.isVisible()  # the workbench is not shown in this headless fixture
 
 
 def test_delete_selected_layers_is_undoable(window):

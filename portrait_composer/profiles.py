@@ -68,9 +68,15 @@ class BakeCandidate:
     label: str
     instance_ids: list
     analysis: "_bake.BakeAnalysis"
+    compatibility_only: bool = False
 
     def to_dict(self) -> dict:
-        return {"label": self.label, "instance_ids": list(self.instance_ids), "analysis": self.analysis.to_dict()}
+        return {
+            "label": self.label,
+            "instance_ids": list(self.instance_ids),
+            "analysis": self.analysis.to_dict(),
+            "compatibility_only": self.compatibility_only,
+        }
 
 
 def _variant_member_ids(document: "AssemblyDocument") -> set:
@@ -100,6 +106,20 @@ def _analyze_static(document: "AssemblyDocument") -> list:
 
 
 def _analyze_rig(document: "AssemblyDocument") -> list:
+    # Once producer-side derivatives are available (or already adopted), the
+    # torso merge is no longer a PORTRAIT_RIG recommendation.  The explicit
+    # legacy action remains available in the Compatibility workflow, but the
+    # default profile never steers authors into consolidating it.
+    producer_split_available = any(
+        bool((source.metadata.get("derived") or {}).get("left_right", {}).get("paths"))
+        for source in document.sources.values()
+    )
+    adopted_split = any(
+        asset.provenance.get("operation") == "adopt_producer_derivative"
+        for asset in document.assets.values()
+    )
+    if producer_split_available or adopted_split:
+        return []
     protected = _variant_member_ids(document)
     torso_ids = [
         inst_id
@@ -113,6 +133,8 @@ def _analyze_rig(document: "AssemblyDocument") -> list:
     ]
     torso_ids.sort(key=lambda i: document.instances[i].draw_order)
     candidate = _candidate(document, "topwear_with_arms", torso_ids)
+    if candidate is not None:
+        candidate.compatibility_only = True
     return [candidate] if candidate else []
 
 
