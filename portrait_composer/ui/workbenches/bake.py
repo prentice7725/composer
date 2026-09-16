@@ -46,7 +46,10 @@ from ..commands import analyze_logical_bake_plan, apply_logical_plan, bake_candi
 
 PROFILES = (PORTRAIT_STATIC, PORTRAIT_RIG, FULL_MOTION)
 VERDICT_TEXT = {CAN_BAKE: "CAN_BAKE ✓", WARN: "WARN !", BLOCK: "BLOCK ✗"}
-PREVIEW_MODES = ("before", "after", "wipe", "flicker", "difference")
+# Flicker remains supported by CanvasScene for old callers, but is deliberately
+# not a default Bake control: a timer-driven preview is hard to inspect and
+# creates motion/focus noise for keyboard and low-vision workflows.
+PREVIEW_MODES = ("before", "after", "wipe", "difference")
 
 
 def _label_for(document, instance_id: str) -> str:
@@ -312,6 +315,7 @@ class _CandidateCard(QFrame):
             reasons_label = QLabel("\n".join(candidate.analysis.reasons))
             reasons_label.setWordWrap(True)
             reasons_label.setStyleSheet("color: #e0a030;")
+            reasons_label.setAccessibleName(f"Bake analysis reasons for {candidate.label}")
             outer.addWidget(reasons_label)
 
         preview_row = QHBoxLayout()
@@ -620,7 +624,9 @@ class BakeWorkbench(QWidget):
         self.simple_cleanup_combo.setAccessibleName("Quick bake seam cleanup")
         simple_layout.addWidget(self.simple_cleanup_combo)
         self.simple_before_button = QPushButton("Before")
+        self.simple_before_button.setAccessibleName("Quick bake before preview")
         self.simple_after_button = QPushButton("After")
+        self.simple_after_button.setAccessibleName("Quick bake after preview")
         self.simple_before_button.clicked.connect(lambda: self._quick_preview("before"))
         self.simple_after_button.clicked.connect(lambda: self._quick_preview("after"))
         simple_layout.addWidget(self.simple_before_button)
@@ -781,6 +787,14 @@ class BakeWorkbench(QWidget):
             self._selection_changed()
             return
         self.status_label.setText(f"{profile}: {len(candidates)} candidate(s)")
+        for candidate in candidates:
+            if candidate.analysis.verdict in {WARN, BLOCK}:
+                reasons = candidate.analysis.reasons or candidate.analysis.block_reasons or ["review required"]
+                self.main_window.remember_diagnostic(
+                    candidate.analysis.verdict,
+                    f"Bake {candidate.label}: {' | '.join(map(str, reasons))}",
+                    context="BAKE",
+                )
         self._add_cards(candidates, profile)
         self._selection_changed()
 
@@ -863,6 +877,12 @@ class BakeWorkbench(QWidget):
         mouth = slots.get("mouth", {})
         expression_status = "READY" if eyes.get("open") and eyes.get("closed") and mouth.get("closed") else "NEEDS REVIEW"
         errors = validate_rig_export(document, self.main_window.image_sources)
+        if errors:
+            self.main_window.remember_diagnostic(
+                "BLOCK",
+                "Rig preflight BLOCK: " + " | ".join(map(str, errors)),
+                context="BAKE",
+            )
         autorig_status = "BLOCKED" if errors else "READY"
         values = {"torso": torso_status, "expressions": expression_status, "autorig": autorig_status}
         for key, label in self.readiness_labels.items():
@@ -1060,7 +1080,9 @@ class BakeWorkbench(QWidget):
             return
         analysis = analyze_bake(document, sources, mode="semantic_merge", seam_policy=self._simple_policy(semantic), result_semantic=semantic)
         if analysis.verdict == BLOCK:
-            self.status_label.setText("Quick Bake blocked: " + " | ".join(analysis.block_reasons))
+            message = "Quick Bake blocked: " + " | ".join(analysis.block_reasons)
+            self.status_label.setText(message)
+            self.main_window.remember_diagnostic("BLOCK", message, context="BAKE")
             return
         self.main_window.canvas.scene_model.preview_bake_candidate(
             sources,
@@ -1071,6 +1093,12 @@ class BakeWorkbench(QWidget):
             bake_mode="semantic_merge",
             seam_policy=self._simple_policy(semantic),
         )
+        if analysis.verdict == WARN:
+            self.main_window.remember_diagnostic(
+                "WARN",
+                "Quick Bake preview: " + " | ".join(map(str, analysis.warn_reasons)),
+                context="BAKE",
+            )
         self.status_label.setText(f"Quick Bake preview {mode}: {analysis.verdict}")
 
     def _quick_bake(self) -> None:
@@ -1086,8 +1114,16 @@ class BakeWorkbench(QWidget):
         policy = self._simple_policy(semantic)
         analysis = analyze_bake(document, sources, mode="semantic_merge", seam_policy=policy, result_semantic=semantic)
         if analysis.verdict == BLOCK:
-            self.status_label.setText("Quick Bake blocked: " + " | ".join(analysis.block_reasons))
+            message = "Quick Bake blocked: " + " | ".join(analysis.block_reasons)
+            self.status_label.setText(message)
+            self.main_window.remember_diagnostic("BLOCK", message, context="BAKE")
             return
+        if analysis.verdict == WARN:
+            self.main_window.remember_diagnostic(
+                "WARN",
+                "Quick Bake warning: " + " | ".join(map(str, analysis.warn_reasons)),
+                context="BAKE",
+            )
         candidate = BakeCandidate("quick_selected_layers", sources, analysis)
         derived_id = _unique_output_name(document, semantic)
         result_holder: dict = {}

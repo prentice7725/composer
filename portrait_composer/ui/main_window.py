@@ -6,9 +6,10 @@ import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QSettings, Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -59,6 +60,8 @@ class MainWindow(QMainWindow):
     SETTINGS_APPLICATION = "PortraitComposer"
     MAX_RECENT_FILES = 10
     WORKBENCH_DEFAULT_HEIGHT = 240
+    UI_SCALE_OPTIONS = ((100, "100%"), (125, "125%"), (150, "150%"), (175, "175%"))
+    _base_application_font: QFont | None = None
 
     def __init__(self, parent=None, *, settings=None):
         super().__init__(parent)
@@ -80,6 +83,7 @@ class MainWindow(QMainWindow):
         self._canvas_image_sources: dict[str, Path] | None = None
         self._portrait_workspace = PortraitInputWorkspace()
         self.import_warnings: list[str] = []
+        self.persistent_diagnostics: list[Diagnostic] = []
         self.harvest_source_pool = {}
         self.producer_bundle_pool = {}
         self.diagnostics: list[Diagnostic] = []
@@ -123,6 +127,7 @@ class MainWindow(QMainWindow):
         self.workbench_dock.raise_()
         self._build_context_bar()
         self._build_menus()
+        self._apply_ui_scale(self._read_ui_scale())
         self._restore_workspace_settings()
         self._update_status()
 
@@ -329,6 +334,20 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.workbench_dock.toggleViewAction())
         view_menu.addAction(self.diagnostics_dock.toggleViewAction())
         view_menu.addSeparator()
+        ui_scale_menu = view_menu.addMenu("UI Scale")
+        ui_scale_menu.setAccessibleName("UI scale")
+        self._ui_scale_actions = {}
+        ui_scale_group = QActionGroup(ui_scale_menu)
+        ui_scale_group.setExclusive(True)
+        for percent, label in self.UI_SCALE_OPTIONS:
+            action = ui_scale_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(percent)
+            action.setToolTip(f"Set UI scale to {label}")
+            action.triggered.connect(lambda _checked=False, value=percent: self._set_ui_scale(value))
+            ui_scale_group.addAction(action)
+            self._ui_scale_actions[percent] = action
+        view_menu.addSeparator()
         advanced_menu = view_menu.addMenu("Advanced Workbenches")
         context_shortcuts = (
             ("Harvest", "H", "HARVEST"),
@@ -417,6 +436,37 @@ class MainWindow(QMainWindow):
         self._translator = install_translator(app, locale)
         self.settings.setValue("locale", locale)
         self._retranslate_ui()
+
+    def _read_ui_scale(self) -> int:
+        try:
+            value = int(self.settings.value("ui_scale", 100))
+        except (TypeError, ValueError):
+            value = 100
+        valid = {percent for percent, _label in self.UI_SCALE_OPTIONS}
+        return value if value in valid else 100
+
+    def _apply_ui_scale(self, percent: int) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        if MainWindow._base_application_font is None:
+            MainWindow._base_application_font = QFont(app.font())
+        font = QFont(MainWindow._base_application_font)
+        factor = percent / 100.0
+        if font.pointSizeF() > 0:
+            font.setPointSizeF(max(1.0, font.pointSizeF() * factor))
+        elif font.pixelSize() > 0:
+            font.setPixelSize(max(1, round(font.pixelSize() * factor)))
+        app.setFont(font)
+        for option, action in getattr(self, "_ui_scale_actions", {}).items():
+            action.setChecked(option == percent)
+
+    def _set_ui_scale(self, percent: int) -> None:
+        valid = {option for option, _label in self.UI_SCALE_OPTIONS}
+        if percent not in valid:
+            return
+        self.settings.setValue("ui_scale", percent)
+        self._apply_ui_scale(percent)
 
     def _read_recent_files(self) -> list[str]:
         value = self.settings.value("recent_files", [])
@@ -646,6 +696,7 @@ class MainWindow(QMainWindow):
         # the canvas must see that same dict, not a snapshot from load time.
         self._canvas_image_sources = self.image_sources if source_map else None
         self.import_warnings = list(import_warnings or [])
+        self.persistent_diagnostics = []
         self.session.bake_analyzed = False
         self.selection_model.clear()
         self._refresh_diagnostics()
@@ -739,9 +790,31 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Portrait re-import failed", str(exc))
 
     def _refresh_diagnostics(self) -> None:
-        self.diagnostics = collect_diagnostics(self.document, self.import_warnings)
+        self.diagnostics = collect_diagnostics(
+            self.document,
+            self.import_warnings,
+            self.persistent_diagnostics,
+        )
         if hasattr(self, "diagnostics_dock"):
             self.diagnostics_dock.refresh(self.document, self.diagnostics, self.session)
+
+    def remember_diagnostic(
+        self,
+        severity: str,
+        message: str,
+        *,
+        target_id: str | None = None,
+        context: str = "ASSEMBLE",
+    ) -> None:
+        """Keep an actionable session warning visible beyond the status bar."""
+        candidate = Diagnostic(severity, str(message), target_id, context)
+        if any(
+            item.severity == candidate.severity and item.message == candidate.message
+            for item in self.persistent_diagnostics
+        ):
+            return
+        self.persistent_diagnostics.append(candidate)
+        self._refresh_diagnostics()
 
     def diagnostics_for_target(self, target_id: str) -> list[Diagnostic]:
         return [item for item in self.diagnostics if item.target_id == target_id]
@@ -1050,6 +1123,7 @@ class MainWindow(QMainWindow):
         try:
             mutate(self.document, self.image_sources)
         except Exception as exc:
+            self.remember_diagnostic("ERROR", f"Edit failed: {exc}")
             self.statusBar().showMessage(f"Edit failed: {exc}", 6000)
             return False
         self._refresh_after_document_change()

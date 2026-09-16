@@ -20,10 +20,16 @@ class DiagnosticsDock(QDockWidget):
         self.summary.setAccessibleName("Diagnostics summary")
         self.checklist = QListWidget()
         self.checklist.setAccessibleName("Assembly status checklist")
+        self.checklist.setMinimumHeight(36)
         self.checklist.itemClicked.connect(self._checklist_clicked)
         self.list = QListWidget()
         self.list.setAccessibleName("Assembly diagnostics")
+        self.list.setMinimumHeight(36)
         self.list.itemClicked.connect(self._diagnostic_clicked)
+        self.persistent_list = QListWidget()
+        self.persistent_list.setAccessibleName("Persistent production alerts")
+        self.persistent_list.setMinimumHeight(36)
+        self.persistent_list.itemClicked.connect(self._diagnostic_clicked)
 
         body = QWidget()
         layout = QVBoxLayout(body)
@@ -32,18 +38,21 @@ class DiagnosticsDock(QDockWidget):
         layout.addWidget(self.summary)
         layout.addWidget(QLabel("ASSEMBLY STATUS"))
         layout.addWidget(self.checklist)
+        layout.addWidget(QLabel("PERSISTENT ALERTS"))
+        layout.addWidget(self.persistent_list)
         layout.addWidget(QLabel("DIAGNOSTICS"))
         layout.addWidget(self.list)
         self.setWidget(body)
 
     def refresh(self, document, diagnostics: list[Diagnostic], session=None) -> None:
         self.checklist.clear()
+        self.persistent_list.clear()
         self.list.clear()
         if document is None:
             self.summary.setText("No Assembly Bundle open")
             return
 
-        errors = sum(item.severity == "ERROR" for item in diagnostics)
+        errors = sum(item.severity in {"ERROR", "BLOCK"} for item in diagnostics)
         warnings = sum(item.severity == "WARN" for item in diagnostics)
         self.summary.setText(f"{errors} error(s) · {warnings} warning(s)")
         for label, state, context in self._checklist(document, diagnostics, session):
@@ -52,10 +61,20 @@ class DiagnosticsDock(QDockWidget):
             item.setData(CHECKLIST_ROLE, context)
             self.checklist.addItem(item)
 
-        if not diagnostics:
+        persistent = [diagnostic for diagnostic in diagnostics if diagnostic.persistent]
+        if not persistent:
+            self.persistent_list.addItem("[OK] No persistent alerts")
+        else:
+            for diagnostic in persistent:
+                item = QListWidgetItem(f"[{diagnostic.severity}] {diagnostic.label}: {diagnostic.message}")
+                item.setData(DIAGNOSTIC_ROLE, diagnostic)
+                self.persistent_list.addItem(item)
+
+        regular = [diagnostic for diagnostic in diagnostics if not diagnostic.persistent]
+        if not regular:
             self.list.addItem("[OK] No diagnostics")
         else:
-            for diagnostic in diagnostics:
+            for diagnostic in regular:
                 item = QListWidgetItem(f"[{diagnostic.severity}] {diagnostic.label}: {diagnostic.message}")
                 item.setData(DIAGNOSTIC_ROLE, diagnostic)
                 self.list.addItem(item)

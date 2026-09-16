@@ -106,17 +106,18 @@ def test_block_candidate_apply_button_stays_disabled(window):
         assert card.acknowledge_box is None
 
 
-def test_before_after_wipe_flicker_difference_render_from_core_renderer(window):
+def test_before_after_wipe_difference_render_from_core_renderer(window):
     window.set_context("BAKE")
     wb = window.bake_workbench
     card = wb._cards[0]
     scene = window.canvas.scene_model
 
-    for mode in ("before", "after", "wipe", "flicker", "difference"):
+    visible_modes = [button.property("mode") for button in card.mode_group.buttons()]
+    assert visible_modes == ["before", "after", "wipe", "difference"]
+    for mode in visible_modes:
         button = next(b for b in card.mode_group.buttons() if b.property("mode") == mode)
         button.setChecked(True)
         assert scene._reference_item.pixmap().size().width() > 0
-    scene._stop_flicker()
 
 
 def test_can_bake_apply_is_one_undo_step_and_provenance_visible(window):

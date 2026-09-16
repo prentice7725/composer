@@ -11,6 +11,7 @@ class Diagnostic:
     message: str
     target_id: str | None = None
     context: str = "ASSEMBLE"
+    persistent: bool = False
 
     @property
     def label(self) -> str:
@@ -61,7 +62,11 @@ def _context_for_message(message: str) -> str:
     return "ASSEMBLE"
 
 
-def collect_diagnostics(document, import_warnings: list[str] | None = None) -> list[Diagnostic]:
+def collect_diagnostics(
+    document,
+    import_warnings: list[str] | None = None,
+    persistent_diagnostics: list[Diagnostic] | None = None,
+) -> list[Diagnostic]:
     """Collect validation and import warnings without mutating the document."""
     if document is None:
         return []
@@ -83,6 +88,20 @@ def collect_diagnostics(document, import_warnings: list[str] | None = None) -> l
         seen.add(key)
         text = str(message)
         diagnostics.append(Diagnostic("WARN", text, _target_for_message(document, text), _context_for_message(text)))
+    for diagnostic in persistent_diagnostics or []:
+        key = (diagnostic.severity, str(diagnostic.message))
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            Diagnostic(
+                diagnostic.severity,
+                str(diagnostic.message),
+                diagnostic.target_id,
+                diagnostic.context,
+                persistent=True,
+            )
+        )
     review = getattr(document, "remap_review", None) or {}
     if review.get("status") == "REVIEW_REQUIRED":
         unresolved = review.get("unresolved_assets", [])
