@@ -319,7 +319,7 @@ def test_production_prepare_rig_auto_detects_garment_pair(window, tmp_path: Path
     wb = window.bake_workbench
     # PREPARE RIG now opens on preflight/export; torso merge is an explicit
     # Advanced/Compatibility action rather than the production default.
-    assert wb.workflow_mode.currentData() == "advanced"
+    assert wb.workflow_mode.currentData() == "simple"
     assert wb._simple_sources() == ["handwear__instance", "topwear__instance"]
     assert not wb.bake_selected_button.isVisible()  # the workbench is not shown in this headless fixture
 

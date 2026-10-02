@@ -34,6 +34,33 @@ class CanvasView(QGraphicsView):
         self.setStyleSheet("QGraphicsView { border: 0; }")
         self._space_panning = False
         self._mask_brush: dict | None = None
+        self._color_pick = None
+
+    def begin_color_pick(self, instance_id, callback) -> None:
+        """Pick native source pixels, or canvas pixels when instance_id is None."""
+        self.cancel_mask_brush()
+        self._color_pick = (instance_id, callback)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def cancel_color_pick(self) -> None:
+        self._color_pick = None
+        self.unsetCursor()
+
+    def color_pick_point(self, scene_pos, instance_id=None):
+        if instance_id is None:
+            rect = self.scene_model.sceneRect()
+            return (scene_pos.x(), scene_pos.y()) if rect.contains(scene_pos) else None
+        item = self.scene_model._hit_items.get(instance_id)
+        if item is None:
+            return None
+        local = item.mapFromScene(scene_pos)
+        rect = item.rect()
+        if not rect.contains(local) or rect.isEmpty():
+            return None
+        width, height = self.scene_model.image_size(instance_id)
+        return ((local.x() - rect.left()) / rect.width() * width,
+                (local.y() - rect.top()) / rect.height() * height)
 
     def load_document(self, document, layers_dir, image_sources=None, *, preserve_view_state=None) -> None:
         view_state = preserve_view_state
@@ -149,6 +176,14 @@ class CanvasView(QGraphicsView):
             return
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
+        if self._color_pick is not None:
+            instance_id, callback = self._color_pick
+            point = self.color_pick_point(scene_pos, instance_id)
+            if point is not None:
+                self.cancel_color_pick()
+                callback(point)
+            event.accept()
+            return
         if self._mask_brush is not None:
             point = self._mask_image_point(scene_pos)
             if point is not None:
@@ -330,6 +365,12 @@ class CanvasView(QGraphicsView):
             )
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._color_pick is not None:
+            _, callback = self._color_pick
+            self.cancel_color_pick()
+            callback(None)
+            event.accept()
+            return
         window = self.window()
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             commit = getattr(window, "commit_pending_operation", None)
