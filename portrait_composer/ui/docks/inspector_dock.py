@@ -10,8 +10,9 @@ step, matching the canvas gizmo's one-drag-one-transaction contract.
 from __future__ import annotations
 
 from pathlib import Path
+from PIL import Image
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTextEdit,
     QToolButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -65,7 +67,10 @@ class InspectorDock(QDockWidget):
         self.form = QFormLayout()
         self.layout.addLayout(self.form)
         self.layout.addStretch(1)
-        self.setWidget(self.body)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.body)
+        self.setWidget(scroll)
         self._instance_id: str | None = None
         self._visual_ops: dict[str, dict] = {}
         self._advanced_button: QToolButton | None = None
@@ -117,6 +122,16 @@ class InspectorDock(QDockWidget):
         self.form.addRow(QLabel("Identity"), QLabel(instance_id))
         self.form.addRow(QLabel("Asset"), QLabel(instance.asset_ref))
         self.form.addRow(QLabel("Semantic"), QLabel(asset.semantic if asset else "—"))
+        visible_box = QCheckBox()
+        visible_box.setAccessibleName("Instance visible")
+        visible_box.setChecked(instance.visible)
+        visible_box.toggled.connect(self._commit_visible)
+        self.form.addRow(QLabel("Visible"), visible_box)
+        opacity_box = self._spin(0.0, 1.0, 0.05, instance.opacity)
+        opacity_box.setAccessibleName("Instance opacity")
+        opacity_box.editingFinished.connect(lambda spin=opacity_box: self._commit_opacity(spin.value()))
+        self.form.addRow(QLabel("Opacity"), opacity_box)
+        self._add_visual_ops_controls(instance)
         summary_rows = self.form.rowCount()
         self._advanced_button = QToolButton()
         self._advanced_button.setCheckable(True)
@@ -199,25 +214,12 @@ class InspectorDock(QDockWidget):
             warnings.setMaximumHeight(110)
             self.form.addRow(QLabel("Warnings"), warnings)
 
-        self._add_visual_ops_controls(instance)
-
         provenance = QTextEdit()
         provenance.setReadOnly(True)
         provenance.setAccessibleName("Instance provenance")
         provenance.setPlainText(provenance_text(document, instance_id))
         provenance.setMaximumHeight(150)
         self.form.addRow(QLabel("Provenance"), provenance)
-
-        visible_box = QCheckBox()
-        visible_box.setAccessibleName("Instance visible")
-        visible_box.setChecked(instance.visible)
-        visible_box.toggled.connect(self._commit_visible)
-        self.form.addRow(QLabel("Visible"), visible_box)
-
-        opacity_box = self._spin(0.0, 1.0, 0.05, instance.opacity)
-        opacity_box.setAccessibleName("Instance opacity")
-        opacity_box.editingFinished.connect(lambda spin=opacity_box: self._commit_opacity(spin.value()))
-        self.form.addRow(QLabel("Opacity"), opacity_box)
 
         transform = instance.transform
         for name, value, minimum, maximum in (
@@ -447,10 +449,10 @@ class InspectorDock(QDockWidget):
         dialog = QDialog(self)
         dialog.setWindowTitle("Color Match")
         form = QFormLayout(dialog)
-        source_x = self._spin(0.0, float(max(1, source_image.width - 1)), 1.0, source_image.width / 2.0)
-        source_y = self._spin(0.0, float(max(1, source_image.height - 1)), 1.0, source_image.height / 2.0)
-        target_x = self._spin(0.0, float(max(1, target_image.width - 1)), 1.0, target_image.width / 2.0)
-        target_y = self._spin(0.0, float(max(1, target_image.height - 1)), 1.0, target_image.height / 2.0)
+        source_x = self._spin(0.0, float(max(0, source_image.width - 1)), 1.0, source_image.width / 2.0)
+        source_y = self._spin(0.0, float(max(0, source_image.height - 1)), 1.0, source_image.height / 2.0)
+        target_x = self._spin(0.0, float(max(0, target_image.width - 1)), 1.0, target_image.width / 2.0)
+        target_y = self._spin(0.0, float(max(0, target_image.height - 1)), 1.0, target_image.height / 2.0)
         strength = self._spin(0.0, 1.0, 0.05, 0.75)
         preserve = QCheckBox("Preserve luminance")
         preserve.setChecked(True)
@@ -460,6 +462,23 @@ class InspectorDock(QDockWidget):
         form.addRow("Target Y", target_y)
         form.addRow("Strength", strength)
         form.addRow("", preserve)
+        def pick(instance, x_spin, y_spin):
+            dialog.hide()
+            def picked(point):
+                if point is not None:
+                    x_spin.setValue(point[0])
+                    y_spin.setValue(point[1])
+                dialog.show()
+                dialog.raise_()
+            window.canvas.begin_color_pick(instance, picked)
+        for label, instance, x_spin, y_spin in (
+            ("Pick source on canvas", instance_id, source_x, source_y),
+            ("Pick target on canvas", None, target_x, target_y),
+        ):
+            pick_button = QPushButton(label)
+            pick_button.setAccessibleName(label)
+            pick_button.clicked.connect(lambda checked=False, i=instance, x=x_spin, y=y_spin: pick(i, x, y))
+            form.addRow(pick_button)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
         preview_button = buttons.addButton("Preview", QDialogButtonBox.ButtonRole.ActionRole)
@@ -478,9 +497,21 @@ class InspectorDock(QDockWidget):
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+        dialog.finished.connect(lambda _: window.canvas.cancel_color_pick())
+        dialog.finished.connect(lambda _: window.canvas.scene_model.clear_transient_preview())
+        dialog.accepted.connect(lambda: self._apply_color_match(
+            window, instance_id, source_image, target_image,
+            (source_x.value(), source_y.value()), (target_x.value(), target_y.value()),
+            strength.value(), preserve.isChecked(),
+        ))
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
+
+    def _apply_color_match(self, window, instance_id, source_image, target_image,
+                           source_point, target_point, strength, preserve_luminance):
         document = window.document
+        if instance_id not in document.instances:
+            return
         existing = {op.get("id") for op in document.instances[instance_id].visual_ops}
         op_id = "color_match"
         index = 2
@@ -495,10 +526,10 @@ class InspectorDock(QDockWidget):
                 op_id=op_id,
                 source_image=source_image,
                 target_image=target_image,
-                source_point=(source_x.value(), source_y.value()),
-                target_point=(target_x.value(), target_y.value()),
-                strength=strength.value(),
-                preserve_luminance=preserve.isChecked(),
+                source_point=source_point,
+                target_point=target_point,
+                strength=strength,
+                preserve_luminance=preserve_luminance,
             )
         )
 
@@ -630,9 +661,7 @@ class InspectorDock(QDockWidget):
         if document is not None and document.instances.get(instance_id, None) is not None:
             if document.instances[instance_id].slot == slot:
                 return
-        window.run_command(
-            lambda document, image_sources: set_instance_slot(document, image_sources, instance_id, slot)
-        )
+        self._defer_command(lambda document, image_sources: set_instance_slot(document, image_sources, instance_id, slot))
 
     def _commit_plane(self, plane: str | None) -> None:
         window = self._main_window()
@@ -643,18 +672,24 @@ class InspectorDock(QDockWidget):
         if document is not None and document.instances.get(instance_id, None) is not None:
             if document.instances[instance_id].plane == plane:
                 return
-        window.run_command(
-            lambda document, image_sources: set_instance_plane(document, image_sources, instance_id, plane)
-        )
+        self._defer_command(lambda document, image_sources: set_instance_plane(document, image_sources, instance_id, plane))
 
     def _commit_opacity(self, value: float) -> None:
         window = self._main_window()
         instance_id = self._instance_id
         if window is None or instance_id is None:
             return
-        window.run_command(
-            lambda document, image_sources: set_instance_opacity(document, image_sources, instance_id, value)
-        )
+        self._defer_command(lambda document, image_sources: set_instance_opacity(document, image_sources, instance_id, value))
+
+    def _defer_command(self, command) -> None:
+        # Refresh replaces editors; never delete a native editor in its own signal.
+        window = self._main_window()
+        document = getattr(window, "document", None)
+        instance_id = self._instance_id
+        def commit():
+            if window.document is document and instance_id in document.instances:
+                window.run_command(command)
+        QTimer.singleShot(0, commit)
 
     def _commit_transform_field(self, field_name: str, value: float) -> None:
         window = self._main_window()

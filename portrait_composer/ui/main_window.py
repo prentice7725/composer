@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
         PREPARE RIG opens on preflight/export.  Legacy torso consolidation is
         still available by explicitly choosing the Compatibility workflow.
         """
-        self.set_context(context, production=(context == "DONOR"))
+        self.set_context(context, production=context in {"DONOR", "BAKE"})
         if context == "DONOR":
             self.donor_workbench._set_advanced(False)
 
@@ -325,6 +325,9 @@ class MainWindow(QMainWindow):
         fit_selection.triggered.connect(self.canvas.fit_selection)
         view_menu.addAction(fit)
         view_menu.addAction(fit_selection)
+        self.production_toolbar.addSeparator()
+        self.production_toolbar.addAction(fit)
+        self.production_toolbar.addAction(fit_selection)
         view_menu.addSeparator()
         search_action = QAction("Focus Tree Search", self)
         search_action.setShortcut(QKeySequence("Ctrl+F"))

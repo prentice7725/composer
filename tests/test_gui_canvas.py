@@ -284,12 +284,14 @@ def test_inspector_slot_and_plane_controls_commit(qapp, portrait_bundle: Path):
     slot_box, plane_box = boxes
     slot_box.setCurrentText("torso")
     slot_box.lineEdit().editingFinished.emit()
+    qapp.processEvents()
     assert document.instances[instance_id].slot == "torso"
 
     plane = document.assets[document.instances[instance_id].asset_ref].planes[0]
     plane_box = window.inspector_dock.findChildren(QComboBox)[1]
     plane_index = plane_box.findData(plane)
     plane_box.activated[int].emit(plane_index)
+    qapp.processEvents()
     assert document.instances[instance_id].plane == plane
 
 

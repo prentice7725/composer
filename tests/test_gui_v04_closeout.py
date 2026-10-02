@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QComboBox, QToolButton
+from PySide6.QtWidgets import QApplication, QComboBox, QToolButton, QCheckBox, QDoubleSpinBox, QPushButton
 
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle
@@ -47,12 +47,22 @@ def test_inspector_keeps_low_level_fields_behind_advanced(window, qapp):
         if combo.accessibleName() == "Instance slot"
     )
     assert not slot.isVisible()
+    for widget_type, name in (
+        (QCheckBox, "Instance visible"),
+        (QDoubleSpinBox, "Instance opacity"),
+        (QPushButton, "Color match selected layer"),
+        (QPushButton, "Add mask visual operation"),
+    ):
+        widget = next(widget for widget in window.inspector_dock.findChildren(widget_type)
+                      if widget.accessibleName() == name)
+        assert not widget.isHidden()
     advanced.click()
     assert slot.isVisible()
 
 
 def test_prepare_rig_exposes_three_readiness_checks(window):
     window._enter_production_context("BAKE")
+    assert window.bake_workbench.workflow_mode.currentData() == "simple"
     assert window.bake_workbench.readiness_labels["torso"].text().startswith("Torso: ")
     assert window.bake_workbench.readiness_labels["expressions"].text().startswith("Expressions: ")
     assert window.bake_workbench.readiness_labels["autorig"].text().startswith("AutoRig Preflight: ")
