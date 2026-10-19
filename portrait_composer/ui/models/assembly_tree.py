@@ -15,6 +15,9 @@ from PySide6.QtGui import QStandardItem, QStandardItemModel
 INSTANCE_ROLE = Qt.ItemDataRole.UserRole + 1
 WARNING_ROLE = Qt.ItemDataRole.UserRole + 2
 META_ROLE = Qt.ItemDataRole.UserRole + 3
+SEARCH_ROLE = Qt.ItemDataRole.UserRole + 4
+LOCK_ROLE = Qt.ItemDataRole.UserRole + 5
+NAME_ROLE = Qt.ItemDataRole.UserRole + 6
 
 # Cross-widget drag source format (Tree -> VariantSet workbench drop
 # targets, directive #9.2). A plain '\n'-joined list of instance ids --
@@ -26,7 +29,7 @@ INSTANCE_MIME_TYPE = "application/x-portrait-composer-instance"
 class AssemblyTreeModel(QStandardItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setHorizontalHeaderLabels(["Assembly"])
+        self.setHorizontalHeaderLabels(["Show", "Layer", "Details", "Locked"])
 
     def mimeTypes(self) -> list[str]:
         return [INSTANCE_MIME_TYPE]
@@ -34,9 +37,7 @@ class AssemblyTreeModel(QStandardItemModel):
     def mimeData(self, indexes) -> QMimeData:
         instance_ids = []
         for index in indexes:
-            if index.column() != 0:
-                continue
-            instance_id = self.itemFromIndex(index).data(INSTANCE_ROLE)
+            instance_id = index.data(INSTANCE_ROLE)
             if instance_id and instance_id not in instance_ids:
                 instance_ids.append(instance_id)
         mime = QMimeData()
@@ -58,8 +59,10 @@ class AssemblyTreeModel(QStandardItemModel):
                     continue
                 asset = document.assets.get(instance.asset_ref)
                 source = asset.source_binding.source_id if asset and asset.source_binding else "derived"
-                visibility = "V" if instance.visible else "H"
                 semantic = asset.semantic if asset else instance.asset_ref
+                authoring = (document.instance_authoring or {}).get(instance_id, {})
+                display_name = authoring.get("display_name") or instance_id
+                locked = bool(authoring.get("locked"))
                 warning_count = warning_counts.get(instance_id, 0) + warning_counts.get(instance.asset_ref, 0)
                 warning_badge = f"  [WARN:{warning_count}]" if warning_count else ""
                 variant_sets = [
@@ -93,13 +96,20 @@ class AssemblyTreeModel(QStandardItemModel):
                 if unresolved:
                     badges.append("[UNRESOLVED]")
                 badges.append(warning_badge.strip()) if warning_badge else None
-                label = f"{hierarchy}{instance_id}  [{instance.slot}]  {source}"
+                label = f"{instance.slot} · {source}"
                 if badges:
                     label += "  " + " ".join(badges)
-                item = QStandardItem(f"{visibility}  {label}")
-                item.setData(instance_id, INSTANCE_ROLE)
-                item.setData(warning_count, WARNING_ROLE)
-                item.setData(
+                visible_item = QStandardItem()
+                visible_item.setCheckable(True)
+                visible_item.setEditable(False)
+                visible_item.setCheckState(Qt.CheckState.Checked if instance.visible else Qt.CheckState.Unchecked)
+                visible_item.setToolTip(f"Show or hide {display_name}")
+                visible_item.setData(f"Visibility for {display_name}", Qt.ItemDataRole.AccessibleTextRole)
+                name_item = QStandardItem(display_name)
+                name_item.setEditable(not locked)
+                name_item.setData(display_name, NAME_ROLE)
+                name_item.setData(warning_count, WARNING_ROLE)
+                name_item.setData(
                     {
                         "semantic": semantic,
                         "source": source,
@@ -111,15 +121,35 @@ class AssemblyTreeModel(QStandardItemModel):
                     },
                     META_ROLE,
                 )
-                item.setToolTip(
-                    f"{semantic} · source {source} · draw order {instance.draw_order}"
+                name_item.setData(
+                    " ".join([display_name, instance_id, semantic, source, instance.slot, hierarchy, label]),
+                    SEARCH_ROLE,
+                )
+                name_item.setToolTip(
+                    f"{hierarchy}{instance_id} · {semantic} · source {source} · draw order {instance.draw_order}"
                     + (f" · VariantSets: {', '.join(variant_sets)}" if variant_sets else "")
                     + (f" · RigIntent: {scope or 'secondary region'}" if scope or region_ids else "")
+                    + (" · Locked; unlock in the Locked column to rename" if locked else "")
                 )
-                item.setEditable(False)
-                item.setCheckable(True)
-                item.setCheckState(Qt.CheckState.Checked if instance.visible else Qt.CheckState.Unchecked)
-                self.appendRow(item)
+                name_item.setData(f"Layer name: {display_name}", Qt.ItemDataRole.AccessibleTextRole)
+                details_item = QStandardItem(label)
+                details_item.setEditable(False)
+                details_item.setToolTip(name_item.toolTip())
+                lock_item = QStandardItem()
+                lock_item.setCheckable(True)
+                lock_item.setEditable(False)
+                lock_item.setCheckState(Qt.CheckState.Checked if locked else Qt.CheckState.Unchecked)
+                lock_item.setData(locked, LOCK_ROLE)
+                lock_item.setToolTip(
+                    f"{display_name} is locked. Unlock to edit." if locked else f"Lock {display_name} against edits."
+                )
+                lock_item.setData(
+                    f"Unlock {display_name}" if locked else f"Lock {display_name}",
+                    Qt.ItemDataRole.AccessibleTextRole,
+                )
+                for cell in (visible_item, name_item, details_item, lock_item):
+                    cell.setData(instance_id, INSTANCE_ROLE)
+                self.appendRow([visible_item, name_item, details_item, lock_item])
         finally:
             self.blockSignals(False)
             self.endResetModel()
@@ -129,7 +159,8 @@ class AssemblyTreeFilter(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self.setFilterKeyColumn(0)
+        self.setFilterKeyColumn(1)
+        self.setFilterRole(SEARCH_ROLE)
         self.mode = "All"
         self.selected_source: str | None = None
 
@@ -149,7 +180,7 @@ class AssemblyTreeFilter(QSortFilterProxyModel):
         if self.mode == "All":
             return True
         model = self.sourceModel()
-        item = model.itemFromIndex(model.index(source_row, 0, source_parent))
+        item = model.itemFromIndex(model.index(source_row, 1, source_parent))
         metadata = item.data(META_ROLE) or {}
         return {
             "Selected Source": (

@@ -43,6 +43,9 @@ from ..commands import (
     set_instance_slot,
     set_instance_transform,
     set_instance_visible,
+    set_instances_opacity,
+    set_instances_visible,
+    move_instances_relative,
     add_instance_mask,
     add_instance_quad_warp,
     add_instance_color,
@@ -72,6 +75,7 @@ class InspectorDock(QDockWidget):
         scroll.setWidget(self.body)
         self.setWidget(scroll)
         self._instance_id: str | None = None
+        self._multi_instance_ids: list[str] = []
         self._visual_ops: dict[str, dict] = {}
         self._advanced_button: QToolButton | None = None
         self._advanced_row_start: int | None = None
@@ -106,20 +110,114 @@ class InspectorDock(QDockWidget):
         document = getattr(self.parent(), "document", None)
         if document is None or not selected_ids:
             self._instance_id = None
+            self._multi_instance_ids = []
             self.form.addRow(QLabel("Selection"), QLabel("Nothing selected"))
             return
         if len(selected_ids) > 1:
             self._instance_id = None
-            self.form.addRow(QLabel("Selection"), QLabel(f"{len(selected_ids)} instances"))
+            self._multi_instance_ids = [
+                instance_id for instance_id in selected_ids if instance_id in document.instances
+            ]
+            instances = [document.instances[instance_id] for instance_id in self._multi_instance_ids]
+            if not instances:
+                self.form.addRow(QLabel("Selection"), QLabel("Nothing selected"))
+                return
+            self.form.addRow(QLabel("Selection"), QLabel(f"{len(instances)} instances"))
+            locked_ids = [
+                instance_id for instance_id in self._multi_instance_ids
+                if (document.instance_authoring or {}).get(instance_id, {}).get("locked")
+            ]
+            if locked_ids:
+                note = QLabel("Unlock all selected layers to edit them together.")
+                note.setWordWrap(True)
+                self.form.addRow(QLabel("Edit lock"), note)
+            enabled = not locked_ids
+
+            visibility_values = {bool(instance.visible) for instance in instances}
+            visible_box = QCheckBox()
+            visible_box.setTristate(True)
+            visible_box.setAccessibleName("Selected layers visibility")
+            visible_box.setToolTip("Set visibility for every selected layer")
+            if len(visibility_values) == 1:
+                visible_box.setCheckState(
+                    Qt.CheckState.Checked if next(iter(visibility_values)) else Qt.CheckState.Unchecked
+                )
+            else:
+                visible_box.setCheckState(Qt.CheckState.PartiallyChecked)
+                visible_box.setText("Mixed")
+            visible_box.setEnabled(enabled)
+            visible_box.clicked.connect(
+                lambda checked, ids=list(self._multi_instance_ids): self._defer_multi_command(
+                    ids,
+                    lambda doc, sources: set_instances_visible(doc, sources, ids, checked),
+                )
+            )
+            self.form.addRow(QLabel("Visible"), visible_box)
+
+            opacity_values = [float(instance.opacity) for instance in instances]
+            mixed_opacity = max(opacity_values) - min(opacity_values) > 1e-9
+            opacity_box = self._spin(0.0, 1.0, 0.05, opacity_values[0])
+            opacity_box.setAccessibleName("Set opacity for selected layers")
+            opacity_box.setToolTip("Enter one opacity for all selected layers")
+            opacity_box.setEnabled(enabled)
+            opacity_row = QWidget()
+            opacity_layout = QHBoxLayout(opacity_row)
+            opacity_layout.setContentsMargins(0, 0, 0, 0)
+            opacity_layout.addWidget(opacity_box)
+            if mixed_opacity:
+                mixed_label = QLabel("Mixed values")
+                mixed_label.setAccessibleName("Selected layers have mixed opacity values")
+                opacity_layout.addWidget(mixed_label)
+            opacity_box.editingFinished.connect(
+                lambda spin=opacity_box, ids=list(self._multi_instance_ids): self._defer_multi_command(
+                    ids,
+                    lambda doc, sources: set_instances_opacity(doc, sources, ids, spin.value()),
+                )
+            )
+            self.form.addRow(QLabel("Opacity"), opacity_row)
+
+            move_row = QWidget()
+            move_layout = QGridLayout(move_row)
+            move_layout.setContentsMargins(0, 0, 0, 0)
+            dx_box = self._spin(-100000.0, 100000.0, 1.0, 0.0)
+            dy_box = self._spin(-100000.0, 100000.0, 1.0, 0.0)
+            dx_box.setAccessibleName("Relative move X in document pixels")
+            dy_box.setAccessibleName("Relative move Y in document pixels")
+            move_button = QPushButton("Move")
+            move_button.setAccessibleName("Move selected layers by relative document pixels")
+            move_button.setEnabled(enabled)
+            move_layout.addWidget(QLabel("ΔX"), 0, 0)
+            move_layout.addWidget(dx_box, 0, 1)
+            move_layout.addWidget(QLabel("ΔY"), 1, 0)
+            move_layout.addWidget(dy_box, 1, 1)
+            move_layout.addWidget(move_button, 0, 2, 2, 1)
+            move_button.clicked.connect(
+                lambda _checked=False, ids=list(self._multi_instance_ids), x=dx_box, y=dy_box:
+                self._defer_multi_command(
+                    ids,
+                    lambda doc, sources: move_instances_relative(
+                        doc, sources, ids, dx=x.value(), dy=y.value()
+                    ),
+                )
+            )
+            self.form.addRow(QLabel("Relative move"), move_row)
             return
+        self._multi_instance_ids = []
         instance_id = selected_ids[0]
         instance = document.instances.get(instance_id)
         if instance is None:
             self._instance_id = None
             return
         self._instance_id = instance_id
+        authoring = (document.instance_authoring or {}).get(instance_id, {})
+        locked = bool(authoring.get("locked"))
         asset = document.assets.get(instance.asset_ref)
         self.form.addRow(QLabel("Identity"), QLabel(instance_id))
+        self.form.addRow(QLabel("Display name"), QLabel(authoring.get("display_name") or instance_id))
+        if locked:
+            lock_note = QLabel("Locked — unlock this layer in the Assembly Tree to edit")
+            lock_note.setWordWrap(True)
+            self.form.addRow(QLabel("Edit lock"), lock_note)
         self.form.addRow(QLabel("Asset"), QLabel(instance.asset_ref))
         self.form.addRow(QLabel("Semantic"), QLabel(asset.semantic if asset else "—"))
         visible_box = QCheckBox()
@@ -234,6 +332,14 @@ class InspectorDock(QDockWidget):
             box.editingFinished.connect(lambda field_name=name, spin=box: self._commit_transform_field(field_name, spin.value()))
             self.form.addRow(QLabel(name), box)
         self._set_advanced(False)
+        if locked:
+            for widget in self.body.findChildren(QWidget):
+                if widget is self._advanced_button:
+                    continue
+                if widget.accessibleName().endswith("details"):
+                    continue
+                if isinstance(widget, (QCheckBox, QComboBox, QDoubleSpinBox, QPushButton, QToolButton)):
+                    widget.setEnabled(False)
 
     def _add_visual_ops_controls(self, instance) -> None:
         """Compact non-destructive VisualOps controls."""
@@ -691,6 +797,19 @@ class InspectorDock(QDockWidget):
                 window.run_command(command)
         QTimer.singleShot(0, commit)
 
+    def _defer_multi_command(self, instance_ids: list[str], command) -> None:
+        """Let the emitting editor/button finish its native Qt signal first."""
+        window = self._main_window()
+        document = getattr(window, "document", None)
+        ids = tuple(instance_ids)
+
+        def commit() -> None:
+            current = getattr(window, "document", None)
+            if current is document and all(instance_id in document.instances for instance_id in ids):
+                window.run_command(command)
+
+        QTimer.singleShot(0, commit)
+
     def _commit_transform_field(self, field_name: str, value: float) -> None:
         window = self._main_window()
         instance_id = self._instance_id
@@ -707,10 +826,12 @@ class InspectorDock(QDockWidget):
             document = getattr(window, "document", None)
             if document is None or instance_id not in document.instances:
                 return
-            window.run_command(
+            committed = window.run_command(
                 lambda document, image_sources: set_instance_transform(
                     document, image_sources, instance_id, **{field_name: value}
                 )
             )
+            if not committed:
+                self.refresh(window.selection_model.instance_ids)
 
         QTimer.singleShot(0, commit)

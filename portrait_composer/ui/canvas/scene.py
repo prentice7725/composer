@@ -113,6 +113,12 @@ class CanvasScene(QGraphicsScene):
             item.setData(INSTANCE_ROLE, instance_id)
             item.setZValue(index)
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            authoring = (document.instance_authoring or {}).get(instance_id, {})
+            display_name = authoring.get("display_name") or instance_id
+            locked = bool(authoring.get("locked"))
+            item.setToolTip(
+                f"{display_name} · {instance_id}" + (" · Locked" if locked else "")
+            )
             self._hit_items[instance_id] = item
         self._refresh_selection(self.selection_model.instance_ids)
 
@@ -152,7 +158,16 @@ class CanvasScene(QGraphicsScene):
     def _refresh_selection(self, selected_ids: list[str]) -> None:
         for instance_id, item in self._hit_items.items():
             active = instance_id in selected_ids
-            item.setPen(QPen(QColor("#ffd166" if active else "#59d4ff"), 2.0 if active else 1.0))
+            locked = bool(
+                (self.document.instance_authoring or {}).get(instance_id, {}).get("locked")
+            ) if self.document is not None else False
+            item.setPen(
+                QPen(
+                    QColor("#ffd166" if active else ("#c792ff" if locked else "#59d4ff")),
+                    2.0 if active else 1.0,
+                    Qt.PenStyle.DashLine if locked else Qt.PenStyle.SolidLine,
+                )
+            )
             item.setSelected(active)
         if len(selected_ids) == 1 and selected_ids[0] in self._hit_items:
             self.gizmo.attach(selected_ids[0], self._hit_items[selected_ids[0]])
@@ -161,6 +176,48 @@ class CanvasScene(QGraphicsScene):
 
     def set_context(self, context: str) -> None:
         self.context = context
+
+    def preview_transforms(self, transforms: dict[str, Transform]) -> None:
+        """Render transient transform overrides through the canonical compositor."""
+        if self.document is None or self._committed_reference is None:
+            return
+        self.preview_state.begin()
+        overrides = {}
+        for instance_id, transform in transforms.items():
+            if instance_id not in self.document.instances:
+                continue
+            self.preview_state.set_transform(instance_id, transform.to_dict())
+            overrides[instance_id] = transform
+            item = self._hit_items.get(instance_id)
+            if item is not None:
+                item.setPos(transform.x, transform.y)
+        sources = {
+            instance_id: self._resolve_image_path(instance_id)
+            for instance_id in self.document.composition.get("draw_order", [])
+        }
+        try:
+            preview = render_subset(
+                self.document,
+                sources,
+                list(self.document.composition.get("draw_order", [])),
+                transform_overrides=overrides,
+            )
+        except (OSError, ValueError):
+            return
+        self._set_preview_pixmap(preview)
+        self.gizmo.reposition()
+
+    def clear_transform_preview(self, instance_ids) -> None:
+        """Restore committed pixels and proxy positions after a nudge gesture."""
+        self.preview_state.clear()
+        self.clear_transient_preview()
+        if self.document is not None:
+            for instance_id in instance_ids:
+                instance = self.document.instances.get(instance_id)
+                item = self._hit_items.get(instance_id)
+                if instance is not None and item is not None:
+                    item.setPos(instance.transform.x, instance.transform.y)
+        self.gizmo.reposition()
 
     def preview_color_match(self, instance_id: str, params: dict) -> None:
         """Show a Color VisualOp preview without changing the document."""
@@ -189,11 +246,18 @@ class CanvasScene(QGraphicsScene):
     # it. Every mode renders starting from self._committed_reference, the
     # same pixels the core renderer produced at the last commit -- never a
     # second, separately-drifting compositor.
-    def preview_harvest_candidate(self, target_tag: str, candidate_path: Path, mode: str) -> None:
+    def preview_harvest_candidate(
+        self,
+        target_tag: str,
+        candidate_path: Path,
+        mode: str,
+        *,
+        canonical_instance_id: str | None = None,
+    ) -> None:
         if self._reference_item is None or self._committed_reference is None:
             return
         self._stop_flicker()
-        inst_id = f"{target_tag}__instance"
+        inst_id = canonical_instance_id or f"{target_tag}__instance"
         existing = self.document.instances.get(inst_id) if self.document is not None else None
         transform = existing.transform if existing is not None else Transform()
         try:
@@ -245,12 +309,19 @@ class CanvasScene(QGraphicsScene):
         else:  # composite
             self._set_preview_pixmap(replaced)
 
-    def preview_derived_pair(self, target_tag: str, left_path: Path, right_path: Path) -> None:
+    def preview_derived_pair(
+        self,
+        target_tag: str,
+        left_path: Path,
+        right_path: Path,
+        *,
+        canonical_instance_id: str | None = None,
+    ) -> None:
         """Preview both producer-side geometric derivatives transiently."""
         if self._reference_item is None or self._committed_reference is None:
             return
         self._stop_flicker()
-        instance_id = f"{target_tag}__instance"
+        instance_id = canonical_instance_id or f"{target_tag}__instance"
         existing = self.document.instances.get(instance_id) if self.document is not None else None
         transform = existing.transform if existing is not None else Transform()
         preview = self._committed_reference.copy()

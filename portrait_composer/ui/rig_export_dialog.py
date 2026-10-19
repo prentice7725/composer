@@ -1,11 +1,13 @@
 """AutoRig export acceptance review dialog (C6-I)."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
     QListWidget,
+    QPushButton,
     QVBoxLayout,
 )
 
@@ -15,11 +17,12 @@ from ..rig_bundle import validate_rig_export
 class RigExportReviewDialog(QDialog):
     """Show the final Composer-owned export contract before writing files."""
 
-    def __init__(self, document, image_sources: dict, parent=None):
+    def __init__(self, document, image_sources: dict, parent=None, *, on_issue=None):
         super().__init__(parent)
         self.setWindowTitle("Review AutoRig Export")
         self.resize(620, 420)
         self.errors = validate_rig_export(document, image_sources)
+        self._on_issue = on_issue
 
         visible_ids = [
             instance_id
@@ -56,6 +59,7 @@ class RigExportReviewDialog(QDialog):
             self.list.addItem(f"[INFO] {check}")
         for error in self.errors:
             self.list.addItem(f"[BLOCK] {error}")
+            self.list.item(self.list.count() - 1).setData(Qt.ItemDataRole.UserRole, error)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         if not self.errors:
@@ -68,5 +72,24 @@ class RigExportReviewDialog(QDialog):
         layout.addWidget(title)
         layout.addWidget(detail)
         layout.addWidget(self.list)
+        if self._on_issue is not None:
+            self.go_to_issue_button = QPushButton("Go to selected issue")
+            self.go_to_issue_button.setAccessibleName("Open the selected export issue in its editor")
+            self.go_to_issue_button.setEnabled(False)
+            self.list.currentItemChanged.connect(
+                lambda current, _previous: self.go_to_issue_button.setEnabled(
+                    current is not None and current.data(Qt.ItemDataRole.UserRole) is not None
+                )
+            )
+            self.go_to_issue_button.clicked.connect(self._go_to_issue)
+            layout.addWidget(self.go_to_issue_button)
         layout.addWidget(buttons)
+
+    def _go_to_issue(self) -> None:
+        item = self.list.currentItem()
+        issue = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if issue is None or self._on_issue is None:
+            return
+        self.reject()
+        self._on_issue(str(issue))
 

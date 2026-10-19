@@ -291,6 +291,7 @@ def harvest_instance(
         draw_order = list(document.composition.get("draw_order", []))
         insert_index = draw_order.index(inst_id) if inst_id in draw_order else len(draw_order)
         existing = document.instances.get(inst_id)
+        preserved_authoring = dict(document.instance_authoring.get(inst_id, {}))
         preserved = {
             "slot": existing.slot if existing is not None else target_tag,
             "visible": existing.visible if existing is not None else True,
@@ -324,6 +325,8 @@ def harvest_instance(
             transform=preserved["transform"],
         )
         document.add_instance(instance)
+        if preserved_authoring:
+            document.instance_authoring[inst_id] = preserved_authoring
         draw_order.insert(min(insert_index, len(draw_order)), inst_id)
         document.composition["draw_order"] = draw_order
 

@@ -91,6 +91,7 @@ class TransformGizmo:
             handle = QGraphicsRectItem(-HANDLE_SIZE / 2, -HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE)
             handle.setBrush(QBrush(QColor("#ffd166")))
             handle.setPen(QPen(QColor("#20242b"), 1.0))
+            handle.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
             handle.setZValue(10_000)
             handle.setData(GIZMO_ROLE, _encode_role("scale", name))
             self.scene.addItem(handle)
@@ -98,6 +99,7 @@ class TransformGizmo:
         rotate_handle = QGraphicsEllipseItem(-HANDLE_SIZE / 2, -HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE)
         rotate_handle.setBrush(QBrush(QColor("#59d4ff")))
         rotate_handle.setPen(QPen(QColor("#20242b"), 1.0))
+        rotate_handle.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         rotate_handle.setZValue(10_000)
         rotate_handle.setData(GIZMO_ROLE, _encode_role("rotate"))
         self.scene.addItem(rotate_handle)
@@ -105,6 +107,8 @@ class TransformGizmo:
         self.reposition()
 
     def detach(self) -> None:
+        if self.drag is not None:
+            self.cancel_drag()
         for handle in self._handles.values():
             self.scene.removeItem(handle)
         self._handles.clear()
@@ -124,8 +128,19 @@ class TransformGizmo:
         }
         for name, local_point in points.items():
             self._handles[name].setPos(self.target_item.mapToScene(local_point))
-        top_center = QPointF((rect.left() + rect.right()) / 2.0, rect.top() - ROTATE_OFFSET)
-        self._handles["rotate"].setPos(self.target_item.mapToScene(top_center))
+        zoom = 1.0
+        views = self.scene.views()
+        if views:
+            zoom = max(0.001, abs(float(views[0].transform().m11())))
+        offset = ROTATE_OFFSET / zoom
+        top_mid_x = (rect.left() + rect.right()) / 2.0
+        top_center = self.target_item.mapToScene(QPointF(top_mid_x, rect.top()))
+        outside = self.target_item.mapToScene(QPointF(top_mid_x, rect.top() - 1.0))
+        normal = top_center - outside
+        normal_length = math.hypot(normal.x(), normal.y())
+        if normal_length > 1e-9:
+            top_center += normal * (offset / normal_length)
+        self._handles["rotate"].setPos(top_center)
 
     # -- drag ------------------------------------------------------------
     def hit_role(self, item) -> Optional[tuple[str, str | None]]:
@@ -138,6 +153,8 @@ class TransformGizmo:
             return False
         instance = self.scene.document.instances.get(self.instance_id)
         if instance is None:
+            return False
+        if (self.scene.document.instance_authoring or {}).get(self.instance_id, {}).get("locked"):
             return False
         kind, _corner = role
         image_w, image_h = self.scene.image_size(self.instance_id)
@@ -228,13 +245,14 @@ class TransformGizmo:
     def cancel_drag(self) -> None:
         drag = self.drag
         self.drag = None
-        if drag is None or self.target_item is None:
+        if drag is None:
             return
-        self.target_item.setRect(drag.start_rect)
-        self.target_item.setPos(drag.start_pos)
-        self.target_item.setRotation(drag.start_rotation)
-        self.target_item.setTransformOriginPoint(drag.start_rect.center())
         self.scene.preview_state.clear()
+        if self.target_item is not None:
+            self.target_item.setRect(drag.start_rect)
+            self.target_item.setPos(drag.start_pos)
+            self.target_item.setRotation(drag.start_rotation)
+            self.target_item.setTransformOriginPoint(drag.start_rect.center())
         self.reposition()
 
     def end_drag(self) -> Optional[dict]:

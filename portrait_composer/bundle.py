@@ -466,6 +466,7 @@ def write_assembly_bundle(
             for instance_id, instance in manifest_document["instances"].items()
         },
         "donor_slots": copy.deepcopy(document.donor_slots),
+        "instance_authoring": manifest_document.pop("instance_authoring", {}),
     }
     manifest_document.pop("donor_slots", None)
     manifest = {"format": ASSEMBLY_FORMAT, "version": ASSEMBLY_VERSION}
@@ -511,6 +512,34 @@ def read_assembly_bundle(path: Path) -> AssemblyDocument:
         manifest["remap_review"] = authoring_state.get("remap_review")
         if "donor_slots" in authoring_state:
             manifest["donor_slots"] = authoring_state.get("donor_slots")
+        instance_authoring = authoring_state.get("instance_authoring", {})
+        if not isinstance(instance_authoring, dict):
+            raise BundleError(f"authoring state instance_authoring must be an object: {authoring_path}")
+        for instance_id, metadata in instance_authoring.items():
+            if instance_id not in manifest.get("instances", {}):
+                raise BundleError(
+                    f"authoring state instance_authoring references unknown instance {instance_id!r}: "
+                    f"{authoring_path}"
+                )
+            if not isinstance(metadata, dict):
+                raise BundleError(
+                    f"authoring state instance_authoring for {instance_id!r} must be an object: {authoring_path}"
+                )
+            if set(metadata) - {"display_name", "locked"}:
+                raise BundleError(
+                    f"authoring state instance_authoring for {instance_id!r} has unknown fields: {authoring_path}"
+                )
+            if "display_name" in metadata and (
+                not isinstance(metadata["display_name"], str) or not metadata["display_name"].strip()
+            ):
+                raise BundleError(
+                    f"authoring state display_name for {instance_id!r} must be non-empty text: {authoring_path}"
+                )
+            if "locked" in metadata and not isinstance(metadata["locked"], bool):
+                raise BundleError(
+                    f"authoring state locked for {instance_id!r} must be a boolean: {authoring_path}"
+                )
+        manifest["instance_authoring"] = instance_authoring
         visual_ops = authoring_state.get("visual_ops", {})
         if not isinstance(visual_ops, dict):
             raise BundleError(f"authoring state visual_ops must be an object: {authoring_path}")

@@ -13,8 +13,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent, QTransform
-from PySide6.QtWidgets import QGraphicsView
+from PySide6.QtWidgets import QApplication, QGraphicsView
 
+from ...instances import Transform
 from .scene import CanvasScene, INSTANCE_ROLE
 
 
@@ -35,6 +36,119 @@ class CanvasView(QGraphicsView):
         self._space_panning = False
         self._mask_brush: dict | None = None
         self._color_pick = None
+        self._keyboard_move: dict | None = None
+        selection_model.subscribe(self._selection_changed_during_nudge)
+
+    def _canvas_has_key_focus(self) -> bool:
+        focus = QApplication.focusWidget()
+        return focus is None or focus is self or focus is self.viewport()
+
+    def _selection_changed_during_nudge(self, selected_ids: list[str]) -> None:
+        if self._keyboard_move is not None and list(selected_ids) != self._keyboard_move["selection"]:
+            self.cancel_keyboard_move()
+
+    def cancel_keyboard_move(self) -> None:
+        gesture = self._keyboard_move
+        self._keyboard_move = None
+        if gesture is not None:
+            self.scene_model.clear_transform_preview(gesture["targets"])
+
+    def _begin_keyboard_move(self) -> bool:
+        document = self.scene_model.document
+        selected = list(self.selection_model.instance_ids)
+        if document is None or not selected:
+            return False
+        from ..commands import selection_move_targets
+
+        targets = selection_move_targets(document, selected)
+        locked = [
+            instance_id for instance_id in targets
+            if (document.instance_authoring or {}).get(instance_id, {}).get("locked")
+        ]
+        if locked:
+            names = [
+                (document.instance_authoring or {}).get(instance_id, {}).get("display_name") or instance_id
+                for instance_id in locked
+            ]
+            window = self.window()
+            if hasattr(window, "statusBar"):
+                window.statusBar().showMessage(
+                    "Edit failed: locked layer(s): " + ", ".join(names) + ". Unlock them before editing.",
+                    6000,
+                )
+            return False
+        self._keyboard_move = {
+            "selection": selected,
+            "targets": targets,
+            "start": {
+                instance_id: Transform.from_dict(document.instances[instance_id].transform.to_dict())
+                for instance_id in targets
+            },
+            "dx": 0.0,
+            "dy": 0.0,
+            "active_keys": set(),
+        }
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(
+                "Nudge: Arrow 1 document px · Shift+Arrow 10 px · release commits once · Esc cancels",
+                5000,
+            )
+        return True
+
+    def _nudge_key(self, event: QKeyEvent) -> bool:
+        key = event.key()
+        directions = {
+            Qt.Key.Key_Left: (-1.0, 0.0),
+            Qt.Key.Key_Right: (1.0, 0.0),
+            Qt.Key.Key_Up: (0.0, -1.0),
+            Qt.Key.Key_Down: (0.0, 1.0),
+        }
+        if key not in directions:
+            return False
+        if self._keyboard_move is None and not self._begin_keyboard_move():
+            return True
+        gesture = self._keyboard_move
+        if gesture is None:
+            return True
+        if list(self.selection_model.instance_ids) != gesture["selection"]:
+            self.cancel_keyboard_move()
+            return True
+        if not event.isAutoRepeat():
+            gesture["active_keys"].add(key)
+        distance = 10.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1.0
+        dx, dy = directions[key]
+        gesture["dx"] += dx * distance
+        gesture["dy"] += dy * distance
+        transforms = {}
+        for instance_id, start in gesture["start"].items():
+            transform = Transform.from_dict(start.to_dict())
+            transform.x += gesture["dx"]
+            transform.y += gesture["dy"]
+            transforms[instance_id] = transform
+        self.scene_model.preview_transforms(transforms)
+        return True
+
+    def _commit_keyboard_move(self) -> None:
+        gesture = self._keyboard_move
+        self._keyboard_move = None
+        if gesture is None:
+            return
+        dx, dy = gesture["dx"], gesture["dy"]
+        self.scene_model.clear_transform_preview(gesture["targets"])
+        if abs(dx) <= 1e-12 and abs(dy) <= 1e-12:
+            return
+        window = self.window()
+        run_command = getattr(window, "run_command", None)
+        if run_command is None:
+            return
+        from ..commands import move_instances_relative
+
+        run_command(
+            lambda document, image_sources: move_instances_relative(
+                document, image_sources, gesture["selection"], dx=dx, dy=dy
+            )
+        )
 
     def begin_color_pick(self, instance_id, callback) -> None:
         """Pick native source pixels, or canvas pixels when instance_id is None."""
@@ -91,6 +205,7 @@ class CanvasView(QGraphicsView):
             return
         self.setTransform(QTransform(transform))
         self.centerOn(center)
+        self.scene_model.gizmo.reposition()
         self.session.canvas_zoom = max(0.05, min(32.0, float(state.get("zoom", self.session.canvas_zoom))))
         self.session.canvas_pan = (
             float(self.horizontalScrollBar().value()),
@@ -174,6 +289,8 @@ class CanvasView(QGraphicsView):
         if event.button() != Qt.MouseButton.LeftButton or self.scene_model.document is None:
             super().mousePressEvent(event)
             return
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.cancel_keyboard_move()
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
         if self._color_pick is not None:
@@ -315,25 +432,34 @@ class CanvasView(QGraphicsView):
             return
         from ..commands import set_instance_transform
 
-        run_command(
+        committed = run_command(
             lambda document, image_sources: set_instance_transform(
                 document, image_sources, instance_id, **fields
             )
         )
+        if not committed:
+            # end_drag has cleared its transient preview already. Rebuild the
+            # committed scene so a rejected linked edit cannot look applied.
+            refresh = getattr(window, "_refresh_after_document_change", None)
+            if refresh is not None:
+                refresh()
 
     def _body_drag_role(self) -> tuple[str, None] | None:
         tool = getattr(self.session, "canvas_tool", "select")
         return None if tool == "select" else (tool, None)
 
     def wheelEvent(self, event):
+        self.cancel_keyboard_move()
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
         self.session.canvas_zoom = max(0.05, min(32.0, self.session.canvas_zoom * factor))
+        self.scene_model.gizmo.reposition()
         event.accept()
 
     def fit_canvas(self) -> None:
         if not self.scene_model.sceneRect().isEmpty():
             self.fitInView(self.scene_model.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self.scene_model.gizmo.reposition()
             self.session.canvas_zoom = 1.0
             self.session.canvas_pan = (0.0, 0.0)
 
@@ -343,6 +469,7 @@ class CanvasView(QGraphicsView):
         zoom = max(0.05, min(32.0, float(zoom)))
         if zoom != 1.0:
             self.scale(zoom, zoom)
+        self.scene_model.gizmo.reposition()
         self.session.canvas_zoom = zoom
         self.horizontalScrollBar().setValue(round(float(pan[0])))
         self.verticalScrollBar().setValue(round(float(pan[1])))
@@ -358,6 +485,7 @@ class CanvasView(QGraphicsView):
             for other in rects[1:]:
                 rect = rect.united(other)
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self.scene_model.gizmo.reposition()
             self.session.canvas_zoom = float(self.transform().m11())
             self.session.canvas_pan = (
                 float(self.horizontalScrollBar().value()),
@@ -365,6 +493,20 @@ class CanvasView(QGraphicsView):
             )
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if not self._canvas_has_key_focus():
+            super().keyPressEvent(event)
+            return
+        if event.key() == Qt.Key.Key_Escape and self._keyboard_move is not None:
+            self.cancel_keyboard_move()
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+                super().keyPressEvent(event)
+            else:
+                self._nudge_key(event)
+                event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape and self._color_pick is not None:
             _, callback = self._color_pick
             self.cancel_color_pick()
@@ -434,9 +576,21 @@ class CanvasView(QGraphicsView):
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            gesture = self._keyboard_move
+            if gesture is not None and not event.isAutoRepeat():
+                gesture["active_keys"].discard(event.key())
+                if not gesture["active_keys"]:
+                    self._commit_keyboard_move()
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_panning = False
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        self.cancel_keyboard_move()
+        super().focusOutEvent(event)

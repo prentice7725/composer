@@ -73,6 +73,9 @@ class AssemblyDocument:
         # authoring state; it is serialized in the v0.3 sidecar, not the
         # frozen Assembly v0.2 manifest.
         self.donor_slots: dict = default_donor_slots()
+        # User-facing names and edit locks belong to Composer's authoring
+        # state.  They never alter semantic IDs or render/rig contracts.
+        self.instance_authoring: dict[str, dict] = {}
         self.provenance = ProvenanceLog()
         self.history = HistoryManager()
         self._transaction_depth = 0
@@ -99,6 +102,7 @@ class AssemblyDocument:
 
     def remove_instance(self, instance_id: str) -> None:
         self.instances.pop(instance_id, None)
+        self.instance_authoring.pop(instance_id, None)
         self.composition["draw_order"] = [r for r in self.composition.get("draw_order", []) if r != instance_id]
 
     # ------------------------------------------------------------------
@@ -143,6 +147,7 @@ class AssemblyDocument:
         self.bake_plans = restored.bake_plans
         self.remap_review = restored.remap_review
         self.donor_slots = restored.donor_slots
+        self.instance_authoring = restored.instance_authoring
         self.provenance = restored.provenance
         # history/undo state itself is NOT part of the document snapshot.
 
@@ -188,6 +193,7 @@ class AssemblyDocument:
             "composition": copy.deepcopy(self.composition),
             "bake_plans": copy.deepcopy(self.bake_plans),
             "remap_review": copy.deepcopy(self.remap_review),
+            "instance_authoring": copy.deepcopy(self.instance_authoring),
             "provenance": self.provenance.to_dict(),
         }
         # Keep the strict v0.2 Assembly payload unchanged for documents that
@@ -214,6 +220,9 @@ class AssemblyDocument:
         doc.bake_plans = copy.deepcopy(d.get("bake_plans", {}))
         doc.remap_review = copy.deepcopy(d.get("remap_review"))
         doc.donor_slots = normalize_donor_slots(d.get("donor_slots"))
+        doc.instance_authoring = _normalize_instance_authoring(
+            d.get("instance_authoring"), set(doc.instances)
+        )
         doc.provenance = ProvenanceLog.from_dict(d.get("provenance", {}))
         return doc
 
@@ -221,3 +230,22 @@ class AssemblyDocument:
     def expression_presets(self) -> dict:
         """Compatibility/readability alias for the C3 preset map."""
         return self.expressions
+
+
+def _normalize_instance_authoring(value: object, instance_ids: set[str]) -> dict[str, dict]:
+    """Keep Composer-only name/lock metadata scoped to live instance IDs."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict] = {}
+    for instance_id, entry in value.items():
+        if instance_id not in instance_ids or not isinstance(entry, dict):
+            continue
+        metadata: dict = {}
+        display_name = entry.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            metadata["display_name"] = display_name.strip()
+        if isinstance(entry.get("locked"), bool):
+            metadata["locked"] = entry["locked"]
+        if metadata:
+            normalized[str(instance_id)] = metadata
+    return normalized
