@@ -46,6 +46,7 @@ class CanvasScene(QGraphicsScene):
         self._flicker_phase = False
         self.last_render_ms = 0.0
         self.preview_state = PreviewState()
+        self.variant_preview_active = False
         self._donor_flicker_timer: QTimer | None = None
         self._donor_flicker_phase = False
         self.gizmo = TransformGizmo(self)
@@ -353,6 +354,7 @@ class CanvasScene(QGraphicsScene):
 
     def clear_transient_preview(self) -> None:
         self._stop_flicker()
+        self.variant_preview_active = False
         if self._committed_reference is not None:
             self._set_preview_pixmap(self._committed_reference)
 
@@ -363,6 +365,7 @@ class CanvasScene(QGraphicsScene):
         if self.document is None or self._committed_reference is None:
             return
         self._stop_flicker()
+        self.variant_preview_active = True
         document = self.document
         canvas = document.composition.get("canvas") or {}
         width = canvas.get("width", self._committed_reference.width)
@@ -384,6 +387,13 @@ class CanvasScene(QGraphicsScene):
                 member_of[member_id] = vs_id
 
         preview = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        visual_ops_root = self.layers_dir.parent if self.image_sources is None and self.layers_dir is not None else None
+        if self.image_sources is not None:
+            for source in self.image_sources.values():
+                if source:
+                    source_path = Path(source)
+                    visual_ops_root = source_path.parent.parent if source_path.parent.name == "layers" else source_path.parent
+                    break
         for instance_id in document.composition.get("draw_order", []):
             inst = document.instances.get(instance_id)
             if inst is None or inst.opacity <= 0:
@@ -396,7 +406,7 @@ class CanvasScene(QGraphicsScene):
             if path is None or not path.exists():
                 continue
             with Image.open(path) as raw:
-                layer = raw.convert("RGBA")
+                layer = apply_visual_ops(raw.convert("RGBA"), inst.visual_ops, base_dir=visual_ops_root)
                 if inst.opacity < 1.0:
                     r, g, b, a = layer.split()
                     a = a.point(lambda v, opacity=inst.opacity: round(v * opacity))
@@ -415,6 +425,7 @@ class CanvasScene(QGraphicsScene):
     def clear_donor_ghost(self) -> None:
         self._stop_donor_flicker()
         self.donor_ghost.clear()
+        self.variant_preview_active = False
         if self._reference_item is not None:
             self._reference_item.setVisible(True)
         if self._committed_reference is not None:

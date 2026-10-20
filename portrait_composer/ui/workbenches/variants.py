@@ -15,7 +15,7 @@ each handler here needing its own refresh call.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..models.assembly_tree import INSTANCE_MIME_TYPE
+from .thumbnail_cache import instance_thumbnail
 
 ARTICULATION_VARIANT_SETS = {"eye_state", "eyes_state", "mouth_state", "mouth_viseme"}
 EMOTION_FAMILIES = ("eye_form", "brow_state", "mouth_form", "overlay_state")
@@ -47,21 +48,18 @@ class _MemberTile(QFrame):
     picked = Signal(str)  # member_id
     remove_requested = Signal(str)  # member_id
 
-    def __init__(self, member_id: str, label: str, image_path, *, is_default: bool, is_active: bool, parent=None):
+    def __init__(self, member_id: str, label: str, main_window, *, is_default: bool, is_active: bool, parent=None):
         super().__init__(parent)
         self.member_id = member_id
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName(f"Variant member {member_id}")
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         thumb = QLabel()
-        pixmap = QPixmap(str(image_path)) if image_path else QPixmap()
-        if not pixmap.isNull():
-            pixmap = pixmap.scaled(
-                THUMBNAIL_SIZE, THUMBNAIL_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-            )
+        pixmap = instance_thumbnail(main_window, member_id, size=THUMBNAIL_SIZE)
         thumb.setPixmap(pixmap)
         thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(thumb)
@@ -77,6 +75,13 @@ class _MemberTile(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.picked.emit(self.member_id)
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.picked.emit(self.member_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _context_menu(self, point) -> None:
         menu = QMenu(self)
@@ -120,11 +125,10 @@ class _VariantSetRow(QFrame):
         if vs is None:
             return
         for member_id in vs["members"]:
-            image_path = self.main_window.canvas.scene_model._resolve_image_path(member_id)
             tile = _MemberTile(
                 member_id,
                 _label_for(document, member_id),
-                image_path,
+                self.main_window,
                 is_default=(member_id == vs.get("default")),
                 is_active=(member_id == vs.get("active")),
             )
@@ -199,10 +203,14 @@ class _ExpressionEditor(QWidget):
         self.preview_button.clicked.connect(self._preview)
         self.apply_button = QPushButton("Apply")
         self.apply_button.setAccessibleName("Apply expression")
+        self.apply_button.setToolTip("Save this preset and apply its visible states as one undoable change.")
         self.apply_button.clicked.connect(self._apply)
         bottom.addWidget(self.preview_button)
         bottom.addWidget(self.apply_button)
         outer.addLayout(bottom)
+        self._escape_preview = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._escape_preview.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._escape_preview.activated.connect(self._cancel_preview)
 
     def refresh(self) -> None:
         document = self.main_window.document
@@ -217,7 +225,10 @@ class _ExpressionEditor(QWidget):
         self._select_preset(self.preset_selector.currentText())
 
     def _select_preset(self, preset_id: str) -> None:
-        self._preset_id = preset_id or None
+        selected = preset_id or None
+        if selected != self._preset_id:
+            self._clear_transient_preview()
+        self._preset_id = selected
         self._rebuild_rows()
 
     def _rebuild_rows(self) -> None:
@@ -254,11 +265,21 @@ class _ExpressionEditor(QWidget):
                 label = _label_for(document, member_id)
                 if state_label:
                     label = f"{state_label} · {label}"
-                combo.addItem(label, member_id)
+                thumbnail = instance_thumbnail(self.main_window, member_id, size=32)
+                missing_image = thumbnail.isNull()
+                if missing_image:
+                    label = f"{label} · image unavailable"
+                combo.addItem(QIcon(thumbnail) if not missing_image else QIcon(), label, member_id)
+                combo.setItemData(
+                    combo.count() - 1,
+                    "Source image unavailable or unreadable" if missing_image else f"Preview {label}",
+                    Qt.ItemDataRole.ToolTipRole,
+                )
             wanted = selections.get(vs_id, vs.get("active"))
             index = combo.findData(wanted)
             if index >= 0:
                 combo.setCurrentIndex(index)
+            combo.currentIndexChanged.connect(self._selection_changed)
             row.addWidget(combo, 1)
             self.rows_layout.addWidget(row_widget)
             self._dropdowns[vs_id] = combo
@@ -269,9 +290,12 @@ class _ExpressionEditor(QWidget):
             self.status_label.setText("No VariantSets yet -- add one above first.")
         else:
             preservation = " · blink/viseme preserved by default"
-            self.status_label.setText(
-                (f"Editing: {self._preset_id}{preservation}" if self._preset_id else "New Preset… to start one.")
-            )
+            if self._preset_id:
+                self.status_label.setText(
+                    f"Editing: {self._preset_id}{preservation} · change a state to preview; Esc cancels"
+                )
+            else:
+                self.status_label.setText("New Preset… to start one.")
 
     def _current_variants(self) -> dict[str, str]:
         variants = {vs_id: combo.currentData() for vs_id, combo in self._dropdowns.items()}
@@ -294,11 +318,13 @@ class _ExpressionEditor(QWidget):
             return
         from ..commands import save_expression
 
-        variants = {
-            vs_id: vs.get("active")
-            for vs_id, vs in document.variant_sets.items()
-            if vs_id not in ARTICULATION_VARIANT_SETS
-        }
+        variants = self._visible_variants()
+        if not variants:
+            variants = {
+                vs_id: vs.get("active")
+                for vs_id, vs in document.variant_sets.items()
+                if vs_id not in ARTICULATION_VARIANT_SETS and vs.get("active") is not None
+            }
         if not variants:
             self.status_label.setText("Create an emotion family first; blink and viseme stay on the articulation board.")
             return
@@ -307,7 +333,41 @@ class _ExpressionEditor(QWidget):
 
     def _preview(self) -> None:
         if self._dropdowns:
-            self.main_window.canvas.scene_model.preview_variant_selection(self._current_variants())
+            self._preview_pending_selection()
+
+    def _visible_variants(self) -> dict[str, str]:
+        return {
+            vs_id: combo.currentData()
+            for vs_id, combo in self._dropdowns.items()
+            if combo.currentData() is not None
+        }
+
+    def _preview_pending_selection(self) -> None:
+        variants = self._visible_variants()
+        if not variants:
+            self.status_label.setText("No visible emotion state can be previewed.")
+            return
+        for variant_set_id, member_id in variants.items():
+            if instance_thumbnail(self.main_window, member_id, size=8).isNull():
+                self.status_label.setText(
+                    f"Cannot preview {variant_set_id}: the selected material image or correction is unavailable."
+                )
+                return
+        self.main_window.canvas.scene_model.preview_variant_selection(variants)
+        self.status_label.setText("Static preview · Esc cancels · Apply saves and applies once")
+
+    def _selection_changed(self, _index: int) -> None:
+        self._preview_pending_selection()
+
+    def _clear_transient_preview(self) -> None:
+        scene = self.main_window.canvas.scene_model
+        if getattr(scene, "variant_preview_active", False):
+            scene.clear_transient_preview()
+
+    def _cancel_preview(self) -> None:
+        if getattr(self.main_window.canvas.scene_model, "variant_preview_active", False):
+            self._clear_transient_preview()
+            self.status_label.setText("Preview cancelled · change a state to preview again")
 
     def _apply(self) -> None:
         if self._preset_id is None or not self._dropdowns:
@@ -316,7 +376,9 @@ class _ExpressionEditor(QWidget):
 
         preset_id = self._preset_id
         variants = self._current_variants()
-        self.main_window.run_command(lambda doc, srcs: save_and_apply_expression(doc, srcs, preset_id, variants))
+        if self.main_window.run_command(lambda doc, srcs: save_and_apply_expression(doc, srcs, preset_id, variants)):
+            self._clear_transient_preview()
+            self.status_label.setText(f"Applied {preset_id} · one undo step")
 
 
 class VariantWorkbench(QWidget):

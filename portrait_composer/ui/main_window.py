@@ -622,7 +622,7 @@ class MainWindow(QMainWindow):
             # one workspace (directive #18) -- it never leaked into the
             # document, so there's nothing to preserve across a switch away.
             self.donor_workbench.clear_ghost()
-        if previous == "ASSEMBLE" and context != "ASSEMBLE" and self.document is not None:
+        if previous != context and self.document is not None:
             self.canvas.scene_model.clear_transient_preview()
         if context == "HARVEST" and self.harvest_source_pool:
             self.harvest_workbench.refresh()
@@ -664,8 +664,6 @@ class MainWindow(QMainWindow):
             # editing aid (directive #18); it isn't part of any other
             # context's canvas presentation.
             self.canvas.scene_model.region_edit.clear()
-        if previous in {"BAKE", "VARIANTS"} and context not in {"BAKE", "VARIANTS"}:
-            self.canvas.scene_model.clear_transient_preview()
         if hasattr(self, "diagnostics_dock"):
             self._refresh_diagnostics()
 
