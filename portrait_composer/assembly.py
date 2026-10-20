@@ -63,6 +63,7 @@ def identity_assembly(bundle: PortraitBundle) -> tuple[AssemblyDocument, dict, l
                 "canvas": dict(bundle.canvas),
                 "validation": dict(bundle.validation),
                 "derived": dict(bundle.derived),
+                "warnings": list(bundle.warnings),
             },
         )
 

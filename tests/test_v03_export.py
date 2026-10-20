@@ -10,8 +10,11 @@ from portrait_composer.assembly import identity_assembly
 from portrait_composer.bake_plan import create_bake_plan
 from portrait_composer.bundle import BundleError, read_assembly_bundle, read_portrait_bundle, write_assembly_bundle
 from portrait_composer.render import render_reference
+from portrait_composer.instances import LayerInstance
 from portrait_composer.rig_bundle import export_rig_bundle, validate_exported_rig_bundle
 from portrait_composer.visual_ops import add_visual_op, apply_visual_ops
+from portrait_composer.donor_slots import set_donor_slot
+from portrait_composer.variants import add_variant_set
 
 from .conftest import make_portrait_bundle
 
@@ -112,11 +115,17 @@ def test_rig_bundle_export_is_separate_and_contains_visible_canonical_layers(tmp
 
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["format"] == "portrait-rig-bundle"
-    assert manifest["version"] == "0.3"
+    assert manifest["version"] == "0.4"
     assert set(manifest["layers"]) == set(document.instances)
+    assert manifest["variant_layers"] == {}
     assert (out_dir / "reference.png").exists()
     assert (out_dir / "rig_intent.json").exists()
     assert (out_dir / "provenance" / "assembly.json").exists()
+    schema = json.loads(Path("schemas/portrait-rig-bundle-v0.4.schema.json").read_text(encoding="utf-8"))
+    import jsonschema
+
+    jsonschema.validate(manifest, schema)
+    assert manifest["source_metadata"]["A001"]["validation"]["static_reconstruction"] == "pass"
     assert validate_exported_rig_bundle(out_dir) == []
 
 
@@ -156,3 +165,57 @@ def test_rig_bundle_exports_visual_ops_and_autorig_layer_metadata(tmp_path: Path
     assert manifest["assets"]["topwear"]["semantic"] == "topwear"
     assert (out_dir / "donors.json").exists()
     assert exported.tobytes() == expected.tobytes()
+
+
+def test_rig_bundle_exports_hidden_expression_members_and_explicit_intent(tmp_path: Path):
+    document, sources, _ = _doc(tmp_path)
+    alternate_id = "head_closed__instance"
+    alternate_source = tmp_path / "head_closed.png"
+    Image.new("RGBA", (40, 40), (180, 20, 30, 220)).save(alternate_source)
+    sources[alternate_id] = alternate_source
+    document.add_instance(
+        LayerInstance(
+            id=alternate_id,
+            asset_ref="head",
+            slot="head",
+            draw_order=max(item.draw_order for item in document.instances.values()) + 1,
+            visible=False,
+        )
+    )
+    document.composition["draw_order"].append(alternate_id)
+    add_variant_set(
+        document,
+        "eyes_state",
+        members=["head__instance", alternate_id],
+        default="head__instance",
+    )
+    set_donor_slot(document, "eyes", "open", "head__instance")
+    set_donor_slot(document, "eyes", "closed", alternate_id)
+
+    out_dir = export_rig_bundle(document, sources, tmp_path / "expressions.rigbundle")
+    manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["variant_layers"] == {alternate_id: f"variants/{alternate_id}.png"}
+    assert (out_dir / "variants" / f"{alternate_id}.png").is_file()
+    assert alternate_id in manifest["instances"]
+    assert manifest["expression_intent"]["articulation"]["blink"]["states"] == {
+        "open": "head__instance",
+        "closed": alternate_id,
+    }
+    assert validate_exported_rig_bundle(out_dir) == []
+
+
+def test_failed_rig_bundle_reexport_preserves_previous_complete_output(tmp_path: Path, monkeypatch):
+    import portrait_composer.rig_bundle as rig_bundle
+
+    document, image_sources, _ = _doc(tmp_path)
+    out_dir = export_rig_bundle(document, image_sources, tmp_path / "stable.rigbundle")
+    original_manifest = (out_dir / "manifest.json").read_bytes()
+    actual_validator = rig_bundle.validate_exported_rig_bundle
+    monkeypatch.setattr(rig_bundle, "validate_exported_rig_bundle", lambda _path: ["forced validation failure"])
+
+    with pytest.raises(rig_bundle.RigBundleError, match="forced validation failure"):
+        export_rig_bundle(document, image_sources, out_dir)
+
+    assert (out_dir / "manifest.json").read_bytes() == original_manifest
+    assert actual_validator(out_dir) == []

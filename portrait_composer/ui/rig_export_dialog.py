@@ -36,20 +36,48 @@ class RigExportReviewDialog(QDialog):
             if asset.provenance.get("operation") in {"donor_import", "donor_replace"}
         ]
         intent = document.rig_intent or {}
+        self.warnings = []
+        for source_id, source in document.sources.items():
+            metadata = source.metadata or {}
+            self.warnings.extend(
+                f"Source {source_id}: {warning}"
+                for warning in metadata.get("warnings", [])
+                if isinstance(warning, str) and warning
+            )
+            validation = metadata.get("validation", {})
+            if isinstance(validation, dict):
+                self.warnings.extend(
+                    f"Source {source_id}: producer validation {name} = {status}"
+                    for name, status in validation.items()
+                    if str(status).lower() not in {"pass", "ready", "ok"}
+                )
+            left_right = (metadata.get("derived", {}) or {}).get("left_right", {})
+            if isinstance(left_right, dict) and left_right.get("status") == "computed":
+                self.warnings.append(
+                    f"Source {source_id}: left/right candidates use image-space geometry. "
+                    "Adopted candidates become independent canonical layers; side is not anatomical identity"
+                )
+        self.warnings.append(
+            "AutoRig exports separate layer meshes; full-body joints, IK, and walking/gait generation "
+            "are outside this contract"
+        )
+        self.warnings = list(dict.fromkeys(self.warnings))
         checks = [
             f"Visible canonical layers: {len(visible_ids)}",
             f"Baked plans: {sum(plan.get('status') == 'BAKED' for plan in plans.values())}/{len(plans)}",
             f"Donor assets: {len(donors)}",
             f"Secondary regions: {len(intent.get('regions', {}))}",
             f"Attachments: {len(intent.get('attachments', {}))}",
+            f"Producer warnings: {len(self.warnings)}",
         ]
-        title = QLabel("Export blocked" if self.errors else "Export ready")
+        title_text = "Export blocked" if self.errors else "Export ready with warnings" if self.warnings else "Export ready"
+        title = QLabel(title_text)
         title.setAccessibleName("AutoRig export status")
         title.setStyleSheet("font-weight: 700;")
         detail = QLabel(
             "Resolve the following issues before export."
             if self.errors
-            else "Composer will write only canonical visible layers and rig-facing metadata."
+            else "Review producer warnings before export. This check does not validate runtime deformation."
         )
         detail.setWordWrap(True)
 
@@ -60,6 +88,8 @@ class RigExportReviewDialog(QDialog):
         for error in self.errors:
             self.list.addItem(f"[BLOCK] {error}")
             self.list.item(self.list.count() - 1).setData(Qt.ItemDataRole.UserRole, error)
+        for warning in self.warnings:
+            self.list.addItem(f"[WARN] {warning}")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         if not self.errors:
