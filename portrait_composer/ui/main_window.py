@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
     def __init__(self, parent=None, *, settings=None):
         super().__init__(parent)
         self.setWindowTitle("Portrait Composer")
-        self.resize(1440, 900)
+        self.resize(*self._default_window_size())
         self.session = UISessionState()
         self.settings = settings or QSettings(self.SETTINGS_ORGANIZATION, self.SETTINGS_APPLICATION)
         self.locale = str(self.settings.value("locale", "en"))
@@ -343,6 +343,11 @@ class MainWindow(QMainWindow):
         self.production_toolbar.addAction(fit)
         self.production_toolbar.addAction(fit_selection)
         view_menu.addSeparator()
+        reset_layout = QAction("Reset Window Layout", self)
+        reset_layout.setToolTip("Restore the default window size and dock arrangement")
+        reset_layout.triggered.connect(self._reset_window_layout)
+        view_menu.addAction(reset_layout)
+        view_menu.addSeparator()
         search_action = QAction("Focus Tree Search", self)
         search_action.setShortcut(QKeySequence("Ctrl+F"))
         search_action.setToolTip("Focus the Assembly Tree search field")
@@ -467,6 +472,48 @@ class MainWindow(QMainWindow):
         valid = {percent for percent, _label in self.UI_SCALE_OPTIONS}
         return value if value in valid else 100
 
+    def _default_window_size(self) -> tuple[int, int]:
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app is not None else None
+        if screen is None:
+            return 1440, 900
+        available = screen.availableGeometry()
+        return (
+            max(640, min(1440, available.width() - 32)),
+            max(480, min(900, available.height() - 48)),
+        )
+
+    def _reset_window_layout(self) -> None:
+        """Restore the default dock arrangement and a screen-fitting window size."""
+        self.settings.remove("geometry")
+        self.settings.remove("window_state")
+        self.settings.sync()
+
+        self.setUpdatesEnabled(False)
+        try:
+            self.showNormal()
+            self.resize(*self._default_window_size())
+            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tree_dock)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.workbench_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.diagnostics_dock)
+            self.tabifyDockWidget(self.workbench_dock, self.diagnostics_dock)
+            self.workbench_dock.show()
+            self.diagnostics_dock.show()
+            self.resizeDocks(
+                [self.tree_dock, self.inspector_dock], [250, 300], Qt.Orientation.Horizontal
+            )
+            self.resizeDocks([self.workbench_dock], [240], Qt.Orientation.Vertical)
+            self.tree_dock.show()
+            self.inspector_dock.show()
+            if self.session.active_context == "ASSEMBLE":
+                self.workbench_dock.hide()
+            else:
+                self.workbench_dock.show()
+                self.workbench_dock.raise_()
+        finally:
+            self.setUpdatesEnabled(True)
+
     def _apply_ui_scale(self, percent: int) -> None:
         app = QApplication.instance()
         if app is None:
@@ -553,7 +600,7 @@ class MainWindow(QMainWindow):
     def _restore_workspace_settings(self) -> None:
         geometry = self.settings.value("geometry")
         if geometry is not None and not self.restoreGeometry(geometry):
-            self.resize(1440, 900)
+            self.resize(*self._default_window_size())
         state = self.settings.value("window_state")
         if state is not None:
             self.restoreState(state)

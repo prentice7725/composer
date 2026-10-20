@@ -80,7 +80,18 @@ class InspectorDock(QDockWidget):
         self._visual_ops: dict[str, dict] = {}
         self._advanced_button: QToolButton | None = None
         self._advanced_row_start: int | None = None
+        self._advanced_expanded = self._read_advanced_preference()
         selection_model.subscribe(self.refresh)
+
+    def _read_advanced_preference(self) -> bool:
+        window = self.parent()
+        settings = getattr(window, "settings", None)
+        if settings is None:
+            return False
+        value = settings.value("inspector_advanced_expanded", False)
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on"}
+        return bool(value)
 
     def _clear(self) -> None:
         while self.form.rowCount():
@@ -89,18 +100,31 @@ class InspectorDock(QDockWidget):
         self._advanced_row_start = None
 
     def _set_advanced(self, expanded: bool) -> None:
+        self._advanced_expanded = bool(expanded)
+        window = self.parent()
+        settings = getattr(window, "settings", None)
+        if settings is not None:
+            settings.setValue("inspector_advanced_expanded", self._advanced_expanded)
         button = self._advanced_button
         start = self._advanced_row_start
         if button is None or start is None:
             return
-        button.setChecked(expanded)
-        button.setText("▾ Advanced" if expanded else "▸ Advanced")
+        button.setChecked(self._advanced_expanded)
+        button.setText("▾ Advanced" if self._advanced_expanded else "▸ Advanced")
+        button.setAccessibleName(
+            "Hide advanced inspector controls" if self._advanced_expanded
+            else "Show advanced inspector controls"
+        )
+        button.setToolTip(
+            "Collapse advanced inspector controls" if self._advanced_expanded
+            else "Expand advanced inspector controls"
+        )
         for row in range(start, self.form.rowCount()):
             for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
                 item = self.form.itemAt(row, role)
                 widget = item.widget() if item is not None else None
                 if widget is not None:
-                    widget.setVisible(expanded)
+                    widget.setVisible(self._advanced_expanded)
 
     def _main_window(self):
         window = self.parent()
@@ -234,7 +258,6 @@ class InspectorDock(QDockWidget):
         summary_rows = self.form.rowCount()
         self._advanced_button = QToolButton()
         self._advanced_button.setCheckable(True)
-        self._advanced_button.setAccessibleName("Show advanced inspector controls")
         self._advanced_button.clicked.connect(self._set_advanced)
         self.form.insertRow(summary_rows, self._advanced_button)
         self._advanced_row_start = summary_rows + 1
@@ -332,7 +355,7 @@ class InspectorDock(QDockWidget):
             box.setAccessibleName(f"Transform {name}")
             box.editingFinished.connect(lambda field_name=name, spin=box: self._commit_transform_field(field_name, spin.value()))
             self.form.addRow(QLabel(name), box)
-        self._set_advanced(False)
+        self._set_advanced(self._advanced_expanded)
         if locked:
             for widget in self.body.findChildren(QWidget):
                 if widget is self._advanced_button:
