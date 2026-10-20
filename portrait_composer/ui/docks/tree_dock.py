@@ -7,7 +7,7 @@ ui/commands.py, never by touching the document from here.
 from __future__ import annotations
 
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QTimer, Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QHeaderView,
-    QShortcut,
     QTreeView,
     QVBoxLayout,
     QWidget,
