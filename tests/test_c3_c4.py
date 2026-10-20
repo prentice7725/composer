@@ -69,8 +69,10 @@ def test_c4_rig_intent_and_upper_torso_preflight_round_trip(tmp_path: Path):
     import jsonschema
     schema = json.loads(Path("schemas/portrait-assembly-v0.2.schema.json").read_text())
     payload = document.to_dict()
+    # Composer-only state belongs in the authoring sidecar, not the v0.2 manifest.
     payload.pop("bake_plans", None)
     payload.pop("remap_review", None)
+    payload.pop("instance_authoring", None)
     for instance in payload.get("instances", {}).values():
         instance.pop("visual_ops", None)
     jsonschema.validate({"format": "portrait-assembly", "version": "0.2", **payload}, schema)
@@ -171,10 +173,11 @@ def test_c3_donor_import_provenance_matte_roi_and_expression(tmp_path: Path):
     import jsonschema
     schema = json.loads(Path("schemas/portrait-assembly-v0.2.schema.json").read_text())
     payload = document.to_dict()
-    # bake_plans/remap_review are Composer v0.3 authoring state and are
-    # persisted in composer-authoring-v03.json, not in strict Assembly v0.2.
+    # Composer-only state is persisted in composer-authoring-v03.json, not
+    # in strict Assembly v0.2.
     payload.pop("bake_plans", None)
     payload.pop("remap_review", None)
+    payload.pop("instance_authoring", None)
     for instance in payload.get("instances", {}).values():
         instance.pop("visual_ops", None)
     manifest = {"format": "portrait-assembly", "version": "0.2", **payload}
