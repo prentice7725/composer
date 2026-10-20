@@ -99,8 +99,8 @@ class CanvasScene(QGraphicsScene):
                 continue
             image_w, image_h = self._resolve_image_size(instance_id, width, height)
             self._image_sizes[instance_id] = (image_w, image_h)
-            scaled_w = max(1.0, image_w * inst.transform.scale_x)
-            scaled_h = max(1.0, image_h * inst.transform.scale_y)
+            scaled_w = max(1.0, image_w * abs(inst.transform.scale_x))
+            scaled_h = max(1.0, image_h * abs(inst.transform.scale_y))
             item = self.addRect(
                 QRectF(0, 0, scaled_w, scaled_h),
                 QPen(QColor("#59d4ff"), 1.5),
@@ -170,8 +170,12 @@ class CanvasScene(QGraphicsScene):
                 )
             )
             item.setSelected(active)
-        if len(selected_ids) == 1 and selected_ids[0] in self._hit_items:
-            self.gizmo.attach(selected_ids[0], self._hit_items[selected_ids[0]])
+        valid_ids = [
+            instance_id for instance_id in selected_ids
+            if self.document is not None and instance_id in self.document.instances
+        ]
+        if len(valid_ids) > 1 or (valid_ids and valid_ids[0] in self._hit_items):
+            self.gizmo.attach_selection(valid_ids)
         else:
             self.gizmo.detach()
 
@@ -189,9 +193,7 @@ class CanvasScene(QGraphicsScene):
                 continue
             self.preview_state.set_transform(instance_id, transform.to_dict())
             overrides[instance_id] = transform
-            item = self._hit_items.get(instance_id)
-            if item is not None:
-                item.setPos(transform.x, transform.y)
+            self._set_proxy_transform(instance_id, transform)
         sources = {
             instance_id: self._resolve_image_path(instance_id)
             for instance_id in self.document.composition.get("draw_order", [])
@@ -208,6 +210,18 @@ class CanvasScene(QGraphicsScene):
         self._set_preview_pixmap(preview)
         self.gizmo.reposition()
 
+    def _set_proxy_transform(self, instance_id: str, transform: Transform) -> None:
+        item = self._hit_items.get(instance_id)
+        if item is None:
+            return
+        image_w, image_h = self.image_size(instance_id)
+        width = max(1.0, image_w * abs(transform.scale_x))
+        height = max(1.0, image_h * abs(transform.scale_y))
+        item.setRect(QRectF(0, 0, width, height))
+        item.setTransformOriginPoint(width / 2.0, height / 2.0)
+        item.setPos(transform.x, transform.y)
+        item.setRotation(transform.rotation)
+
     def clear_transform_preview(self, instance_ids) -> None:
         """Restore committed pixels and proxy positions after a nudge gesture."""
         self.preview_state.clear()
@@ -215,9 +229,8 @@ class CanvasScene(QGraphicsScene):
         if self.document is not None:
             for instance_id in instance_ids:
                 instance = self.document.instances.get(instance_id)
-                item = self._hit_items.get(instance_id)
-                if instance is not None and item is not None:
-                    item.setPos(instance.transform.x, instance.transform.y)
+                if instance is not None:
+                    self._set_proxy_transform(instance_id, instance.transform)
         self.gizmo.reposition()
 
     def preview_color_match(self, instance_id: str, params: dict) -> None:

@@ -1225,6 +1225,7 @@ class MainWindow(QMainWindow):
             self,
             "Canvas Shortcuts",
             "V  Select tool\nG  Move tool\nR  Rotate tool\nS  Scale tool\n"
+            "Ctrl+click  Add or remove a layer from the selection; group scale/rotation uses its center\n"
             "Arrow keys  Move selection by 1 document pixel; move an active donor preview while aligning\n"
             "Shift+Arrow  Move selection or donor preview by 10 document pixels\n"
             "Hold an arrow and release to make one undoable move; Esc cancels.\n"

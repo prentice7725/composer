@@ -238,6 +238,49 @@ def move_instances_relative(document, image_sources, instance_ids, *, dx: float 
                 transform.y += dy
 
 
+def set_instances_transforms(document, image_sources, transforms: dict[str, dict]) -> bool:
+    """Commit a multi-layer transform preview as one transaction.
+
+    Canvas group transforms include linked members in ``transforms`` so each
+    linked group is calculated around the shared selection pivot exactly
+    once. Applying the resulting placements together keeps link offsets and
+    relative rotations intact while preserving the existing link membership.
+    """
+    from math import isfinite
+
+    if not transforms:
+        return False
+    normalized = {}
+    for raw_id, raw_transform in transforms.items():
+        instance_id = str(raw_id)
+        instance = _instance(document, instance_id)
+        values = {
+            name: float(raw_transform[name])
+            for name in ("x", "y", "scale_x", "scale_y", "rotation")
+        }
+        if not all(isfinite(value) for value in values.values()):
+            raise ValueError(f"transform for {instance_id!r} contains a non-finite value")
+        normalized[instance_id] = values
+
+    _require_unlocked(document, normalized)
+    changed = {
+        instance_id: values
+        for instance_id, values in normalized.items()
+        if any(
+            abs(getattr(document.instances[instance_id].transform, name) - value) > 1e-9
+            for name, value in values.items()
+        )
+    }
+    if not changed:
+        return False
+    with document.transaction():
+        for instance_id, values in changed.items():
+            transform = document.instances[instance_id].transform
+            for name, value in values.items():
+                setattr(transform, name, value)
+    return True
+
+
 def add_instance_mask(document, image_sources, instance_id: str, *, op_id: str, path: str) -> None:
     _require_unlocked(document, [instance_id])
     add_visual_op(document, instance_id, {"id": op_id, "type": "mask", "params": {"path": path}})

@@ -33,7 +33,10 @@ class CanvasView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Portrait composition canvas")
-        self.setToolTip("Canvas: drag to transform a selected layer; hold Space to pan")
+        self.setToolTip(
+            "Canvas: Ctrl+click to select multiple layers; scale and rotate around the selection center; "
+            "hold Space to pan"
+        )
         self.setStyleSheet("QGraphicsView { border: 0; }")
         self._space_panning = False
         self._mask_brush: dict | None = None
@@ -416,8 +419,12 @@ class CanvasView(QGraphicsView):
         instance_id = item.data(INSTANCE_ROLE) if item is not None else None
         if instance_id:
             additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-            self.selection_model.select(str(instance_id), additive=additive)
-            if not additive and self.scene_model.gizmo.instance_id == instance_id:
+            was_selected = str(instance_id) in self.selection_model.instance_ids
+            if additive:
+                self.selection_model.select(str(instance_id), additive=True)
+            elif not was_selected:
+                self.selection_model.select(str(instance_id))
+            if not additive and str(instance_id) in self.selection_model.instance_ids:
                 role = self._body_drag_role()
                 if role is not None:
                     self.scene_model.gizmo.begin_drag(role, scene_pos)
@@ -484,10 +491,26 @@ class CanvasView(QGraphicsView):
         )
 
     def _commit_transform(self, fields: dict) -> None:
-        instance_id = self.scene_model.gizmo.instance_id
         window = self.window()
         run_command = getattr(window, "run_command", None)
-        if instance_id is None or run_command is None:
+        if run_command is None:
+            return
+        group_transforms = fields.get("group_transforms")
+        if group_transforms is not None:
+            from ..commands import set_instances_transforms
+
+            committed = run_command(
+                lambda document, image_sources: set_instances_transforms(
+                    document, image_sources, group_transforms
+                )
+            )
+            if not committed:
+                refresh = getattr(window, "_refresh_after_document_change", None)
+                if refresh is not None:
+                    refresh()
+            return
+        instance_id = self.scene_model.gizmo.instance_id
+        if instance_id is None:
             return
         from ..commands import set_instance_transform
 
