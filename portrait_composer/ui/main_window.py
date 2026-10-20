@@ -1178,8 +1178,8 @@ class MainWindow(QMainWindow):
             self,
             "Canvas Shortcuts",
             "V  Select tool\nG  Move tool\nR  Rotate tool\nS  Scale tool\n"
-            "Arrow keys  Move selection by 1 document pixel\n"
-            "Shift+Arrow  Move selection by 10 document pixels\n"
+            "Arrow keys  Move selection by 1 document pixel; move an active donor preview while aligning\n"
+            "Shift+Arrow  Move selection or donor preview by 10 document pixels\n"
             "Hold an arrow and release to make one undoable move; Esc cancels.\n"
             "Space  Pan the canvas\nAlt+click  Cycle overlapping layers",
         )

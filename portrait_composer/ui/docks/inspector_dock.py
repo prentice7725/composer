@@ -36,7 +36,8 @@ from PySide6.QtWidgets import (
 )
 
 from ...slots import SLOT_VOCABULARY
-from ...color_match import color_match_params
+from ...color_match import color_match_params, sample_patch
+from ...visual_ops import apply_visual_ops
 from ..commands import (
     set_instance_opacity,
     set_instance_plane,
@@ -405,11 +406,19 @@ class InspectorDock(QDockWidget):
             radius.setAccessibleName("Mask brush radius")
             brush_layout.addWidget(QLabel("Radius"), 2, 0)
             brush_layout.addWidget(radius, 2, 1)
+            strength = self._spin(0.0, 100.0, 5.0, 100.0)
+            strength.setSuffix(" %")
+            strength.setAccessibleName("Mask brush strength")
+            brush_layout.addWidget(QLabel("Strength"), 3, 0)
+            brush_layout.addWidget(strength, 3, 1)
             brush_button = QPushButton("Paint on Canvas")
             brush_button.setAccessibleName("Enable mask brush")
+            brush_button.setToolTip("Drag inside the selected layer. Esc cancels the stroke; release commits one undoable stroke.")
             brush_button.clicked.connect(
-                lambda checked=False, selector=mask_selector, mode=mode_selector, spin=radius:
-                self._enable_mask_brush(selector.currentData(), mode.currentData(), spin.value())
+                lambda checked=False, selector=mask_selector, mode=mode_selector, spin=radius, amount=strength:
+                self._enable_mask_brush(
+                    selector.currentData(), mode.currentData(), spin.value(), amount.value() / 100.0
+                )
             )
             self.form.addRow(QLabel("Mask Brush"), brush_box)
             self.form.addRow(QLabel(""), brush_button)
@@ -499,11 +508,13 @@ class InspectorDock(QDockWidget):
             index += 1
         window.run_command(lambda document, image_sources: add_instance_mask(document, image_sources, instance_id, op_id=op_id, path=path))
 
-    def _enable_mask_brush(self, op_id: str, mode: str, radius: float) -> None:
+    def _enable_mask_brush(self, op_id: str, mode: str, radius: float, strength: float) -> None:
         window = self._main_window()
         if window is None or self._instance_id is None:
             return
-        window.canvas.enable_mask_brush(self._instance_id, op_id, radius=radius, mode=mode)
+        window.canvas.enable_mask_brush(
+            self._instance_id, op_id, radius=radius, mode=mode, strength=strength
+        )
 
     def _add_quad_warp(self, instance) -> None:
         window = self._main_window()
@@ -550,11 +561,43 @@ class InspectorDock(QDockWidget):
         if source_path is None or not Path(source_path).exists() or target_image is None:
             window.statusBar().showMessage("Color Match needs a selected layer and a rendered reference.", 5000)
             return
-        with Image.open(source_path) as raw:
-            source_image = raw.convert("RGBA")
+        target_image = target_image.copy()
+        scene = window.canvas.scene_model
+        if scene.image_sources is not None:
+            visual_ops_root = None
+            for source in scene.image_sources.values():
+                if source:
+                    candidate = Path(source)
+                    visual_ops_root = candidate.parent.parent if candidate.parent.name == "layers" else candidate.parent
+                    break
+        else:
+            visual_ops_root = scene.layers_dir.parent if scene.layers_dir is not None else Path(source_path).parent
+        try:
+            with Image.open(source_path) as raw:
+                source_image = apply_visual_ops(
+                    raw.convert("RGBA"),
+                    window.document.instances[instance_id].visual_ops,
+                    base_dir=visual_ops_root,
+                )
+        except (OSError, ValueError, TypeError) as exc:
+            window.statusBar().showMessage(f"Color Match cannot read the selected layer: {exc}", 6000)
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("Color Match")
         form = QFormLayout(dialog)
+        instructions = QLabel(
+            "Pick a visible source color and a visible target color on the canvas. "
+            "The target is sampled from the committed image, even while Preview is shown. "
+            "Coordinate fields below are the precision alternative. Esc cancels the current point pick; "
+            "Cancel closes this dialog without applying."
+        )
+        instructions.setWordWrap(True)
+        instructions.setAccessibleName("Color Match instructions")
+        form.addRow(instructions)
+        pick_status = QLabel("Canvas samples: not picked")
+        pick_status.setWordWrap(True)
+        pick_status.setAccessibleName("Color Match sample status")
+        form.addRow(pick_status)
         source_x = self._spin(0.0, float(max(0, source_image.width - 1)), 1.0, source_image.width / 2.0)
         source_y = self._spin(0.0, float(max(0, source_image.height - 1)), 1.0, source_image.height / 2.0)
         target_x = self._spin(0.0, float(max(0, target_image.width - 1)), 1.0, target_image.width / 2.0)
@@ -562,54 +605,91 @@ class InspectorDock(QDockWidget):
         strength = self._spin(0.0, 1.0, 0.05, 0.75)
         preserve = QCheckBox("Preserve luminance")
         preserve.setChecked(True)
+        def pick(instance, x_spin, y_spin, label, alpha_image=None):
+            dialog.hide()
+            def picked(point):
+                if point is not None:
+                    x_spin.setValue(point[0])
+                    y_spin.setValue(point[1])
+                    pick_status.setText(f"Canvas samples: {label} point set")
+                else:
+                    pick_status.setText(f"Canvas samples: {label} point pick cancelled; values unchanged")
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+            window.canvas.begin_color_pick(instance, picked, source_image=alpha_image)
+            window.statusBar().showMessage(
+                f"Click a visible {label.lower()} point on the canvas. Esc cancels this pick; Cancel closes Color Match.",
+                8000,
+            )
+        pick_box = QWidget()
+        pick_layout = QHBoxLayout(pick_box)
+        pick_layout.setContentsMargins(0, 0, 0, 0)
+        for label, instance, x_spin, y_spin, alpha_image in (
+            ("Pick source on canvas", instance_id, source_x, source_y, source_image),
+            ("Pick target on canvas", None, target_x, target_y, None),
+        ):
+            pick_button = QPushButton(label)
+            pick_button.setAccessibleName(label)
+            pick_label = "source" if instance is not None else "target"
+            pick_button.setToolTip(
+                "Pick a source pixel from the selected layer" if instance is not None
+                else "Pick a target pixel from the committed composite"
+            )
+            pick_button.clicked.connect(
+                lambda checked=False, i=instance, x=x_spin, y=y_spin, name=pick_label, img=alpha_image:
+                pick(i, x, y, name, img)
+            )
+            pick_layout.addWidget(pick_button)
+        form.addRow("Pick colors", pick_box)
+        form.addRow(QLabel("Coordinate fields (precision alternative)"))
         form.addRow("Source X", source_x)
         form.addRow("Source Y", source_y)
         form.addRow("Target X", target_x)
         form.addRow("Target Y", target_y)
         form.addRow("Strength", strength)
         form.addRow("", preserve)
-        def pick(instance, x_spin, y_spin):
-            dialog.hide()
-            def picked(point):
-                if point is not None:
-                    x_spin.setValue(point[0])
-                    y_spin.setValue(point[1])
-                dialog.show()
-                dialog.raise_()
-            window.canvas.begin_color_pick(instance, picked)
-        for label, instance, x_spin, y_spin in (
-            ("Pick source on canvas", instance_id, source_x, source_y),
-            ("Pick target on canvas", None, target_x, target_y),
-        ):
-            pick_button = QPushButton(label)
-            pick_button.setAccessibleName(label)
-            pick_button.clicked.connect(lambda checked=False, i=instance, x=x_spin, y=y_spin: pick(i, x, y))
-            form.addRow(pick_button)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
         preview_button = buttons.addButton("Preview", QDialogButtonBox.ButtonRole.ActionRole)
         def match_params():
-            source_rgb = tuple(source_image.getpixel((round(source_x.value()), round(source_y.value())))[:3])
-            target_rgb = tuple(target_image.getpixel((round(target_x.value()), round(target_y.value())))[:3])
+            source_rgb = sample_patch(source_image, (source_x.value(), source_y.value()))
+            target_rgb = sample_patch(target_image, (target_x.value(), target_y.value()))
             return color_match_params(
                 source_rgb,
                 target_rgb,
                 strength=strength.value(),
                 preserve_luminance=preserve.isChecked(),
             )
-        preview_button.clicked.connect(
-            lambda: window.canvas.scene_model.preview_color_match(instance_id, match_params())
-        )
-        buttons.accepted.connect(dialog.accept)
+
+        def preview_match():
+            try:
+                params = match_params()
+            except ValueError as exc:
+                pick_status.setText(f"Cannot preview: {exc}")
+                return
+            window.canvas.scene_model.preview_color_match(instance_id, params)
+            pick_status.setText("Preview shown from the committed source and target samples")
+
+        def apply_match():
+            try:
+                match_params()
+            except ValueError as exc:
+                pick_status.setText(f"Cannot apply: {exc}")
+                return
+            dialog.accept()
+            self._apply_color_match(
+                window, instance_id, source_image, target_image,
+                (source_x.value(), source_y.value()), (target_x.value(), target_y.value()),
+                strength.value(), preserve.isChecked(),
+            )
+
+        preview_button.clicked.connect(preview_match)
+        buttons.accepted.connect(apply_match)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         dialog.finished.connect(lambda _: window.canvas.cancel_color_pick())
         dialog.finished.connect(lambda _: window.canvas.scene_model.clear_transient_preview())
-        dialog.accepted.connect(lambda: self._apply_color_match(
-            window, instance_id, source_image, target_image,
-            (source_x.value(), source_y.value()), (target_x.value(), target_y.value()),
-            strength.value(), preserve.isChecked(),
-        ))
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.show()
 

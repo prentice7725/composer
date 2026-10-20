@@ -9,6 +9,8 @@ core mutation primitives itself, only this module.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from .. import links as _links
 from .. import rig_intent as _rig_intent
 from .. import secondary_regions as _secondary_regions
@@ -300,17 +302,19 @@ def paint_instance_mask(
     points: list[tuple[float, float]],
     radius: float,
     mode: str,
+    strength: float = 1.0,
     work_dir,
     base_dir=None,
-) -> None:
+) -> Path | None:
     _require_unlocked(document, [instance_id])
-    edit_mask_stroke(
+    return edit_mask_stroke(
         document,
         instance_id,
         op_id,
         points=points,
         radius=radius,
         mode=mode,
+        strength=strength,
         work_dir=work_dir,
         base_dir=base_dir,
     )

@@ -230,9 +230,26 @@ class CanvasScene(QGraphicsScene):
             return
         try:
             with Image.open(path) as raw:
+                ops = list(instance.visual_ops)
+                preview_id = "__color_match_preview__"
+                index = 2
+                while any(op.get("id") == preview_id for op in ops):
+                    preview_id = f"__color_match_preview_{index}__"
+                    index += 1
+                ops.append({"id": preview_id, "type": "color", "params": params})
+                if self.image_sources is not None:
+                    visual_ops_root = None
+                    for source in self.image_sources.values():
+                        if source:
+                            source_path = Path(source)
+                            visual_ops_root = source_path.parent.parent if source_path.parent.name == "layers" else source_path.parent
+                            break
+                else:
+                    visual_ops_root = self.layers_dir.parent if self.layers_dir is not None else path.parent
                 corrected = apply_visual_ops(
                     raw.convert("RGBA"),
-                    [{"id": "preview", "type": "color", "params": params}],
+                    ops,
+                    base_dir=visual_ops_root,
                 )
             positioned, offset = _positioned(corrected, instance.transform)
         except (OSError, ValueError):

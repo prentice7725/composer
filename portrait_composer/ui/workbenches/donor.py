@@ -116,8 +116,17 @@ class DonorWorkbench(QWidget):
         self.advanced_button.clicked.connect(self._toggle_advanced)
         top.addWidget(self.advanced_button)
         self.target_label = QLabel("Target: none selected")
+        self.target_label.setToolTip(
+            "While a donor preview is active, drag it to move or use Arrow / Shift+Arrow to nudge by 1 / 10 document pixels."
+        )
         top.addWidget(self.target_label, 1)
         outer.addLayout(top)
+        self.alignment_help = QLabel(
+            "Donor alignment: drag to move · Arrow 1 document px · Shift+Arrow 10 px · Import applies the placement"
+        )
+        self.alignment_help.setWordWrap(True)
+        self.alignment_help.setAccessibleName("Donor alignment keyboard help")
+        outer.addWidget(self.alignment_help)
 
         slot_box = QGroupBox("Face Expression Materials · face_expression_core_v1")
         slot_layout = QHBoxLayout(slot_box)
@@ -500,6 +509,11 @@ class DonorWorkbench(QWidget):
             opacity=opacity,
             target_roi=info["roi"] if info else None,
             target_rotation=info["rotation"] if info else 0.0,
+        )
+        self.main_window.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.main_window.statusBar().showMessage(
+            "Align donor: drag on the canvas or use Arrow / Shift+Arrow to move by 1 / 10 document pixels. Import applies placement.",
+            8000,
         )
         self._set_controls_enabled(True)
         self._metrics_timer.start()

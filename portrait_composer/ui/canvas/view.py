@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
+from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsView
@@ -36,6 +38,8 @@ class CanvasView(QGraphicsView):
         self._space_panning = False
         self._mask_brush: dict | None = None
         self._color_pick = None
+        self._color_pick_source_image = None
+        self._color_pick_error = "Choose a visible point in the canvas."
         self._keyboard_move: dict | None = None
         selection_model.subscribe(self._selection_changed_during_nudge)
 
@@ -150,31 +154,61 @@ class CanvasView(QGraphicsView):
             )
         )
 
-    def begin_color_pick(self, instance_id, callback) -> None:
+    def begin_color_pick(self, instance_id, callback, *, source_image=None) -> None:
         """Pick native source pixels, or canvas pixels when instance_id is None."""
         self.cancel_mask_brush()
         self._color_pick = (instance_id, callback)
+        self._color_pick_source_image = source_image.copy() if source_image is not None else None
+        self._color_pick_error = "Choose a visible point in the canvas."
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def cancel_color_pick(self) -> None:
         self._color_pick = None
+        self._color_pick_source_image = None
         self.unsetCursor()
 
     def color_pick_point(self, scene_pos, instance_id=None):
         if instance_id is None:
             rect = self.scene_model.sceneRect()
-            return (scene_pos.x(), scene_pos.y()) if rect.contains(scene_pos) else None
+            image = self.scene_model._committed_reference
+            if image is None or not rect.contains(scene_pos) or rect.width() <= 0 or rect.height() <= 0:
+                self._color_pick_error = "Target sample is outside the committed canvas."
+                return None
+            x = min(image.width - 1, int((scene_pos.x() - rect.left()) / rect.width() * image.width))
+            y = min(image.height - 1, int((scene_pos.y() - rect.top()) / rect.height() * image.height))
+            if image.getpixel((x, y))[3] <= 8:
+                self._color_pick_error = "Target sample is transparent in the committed image. Pick a visible pixel."
+                return None
+            return (x, y)
         item = self.scene_model._hit_items.get(instance_id)
         if item is None:
+            self._color_pick_error = "The selected source layer is not visible on the canvas."
             return None
         local = item.mapFromScene(scene_pos)
         rect = item.rect()
         if not rect.contains(local) or rect.isEmpty():
+            self._color_pick_error = "Source sample is outside the selected layer. Pick inside its visible bounds."
             return None
         width, height = self.scene_model.image_size(instance_id)
-        return ((local.x() - rect.left()) / rect.width() * width,
-                (local.y() - rect.top()) / rect.height() * height)
+        x = min(width - 1, int((local.x() - rect.left()) / rect.width() * width))
+        y = min(height - 1, int((local.y() - rect.top()) / rect.height() * height))
+        path = self.scene_model._resolve_image_path(instance_id)
+        try:
+            if self._color_pick_source_image is not None:
+                alpha = self._color_pick_source_image.getpixel((x, y))[3]
+            elif path is not None:
+                with Image.open(path) as raw:
+                    alpha = raw.convert("RGBA").getpixel((x, y))[3]
+            else:
+                raise OSError("source path is unavailable")
+            visible = alpha > 8
+        except (OSError, ValueError, IndexError):
+            visible = False
+        if not visible:
+            self._color_pick_error = "Source sample is transparent or unavailable. Pick a visible pixel."
+            return None
+        return (x, y)
 
     def load_document(self, document, layers_dir, image_sources=None, *, preserve_view_state=None) -> None:
         view_state = preserve_view_state
@@ -220,18 +254,23 @@ class CanvasView(QGraphicsView):
         )
 
     # -- selection + gizmo/donor-ghost gestures --------------------------
-    def enable_mask_brush(self, instance_id: str, op_id: str, *, radius: float, mode: str) -> None:
+    def enable_mask_brush(
+        self, instance_id: str, op_id: str, *, radius: float, mode: str, strength: float = 1.0
+    ) -> None:
         self._mask_brush = {
             "instance_id": instance_id,
             "op_id": op_id,
             "radius": float(radius),
             "mode": mode,
+            "strength": max(0.0, min(1.0, float(strength))),
             "points": [],
         }
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         window = self.window()
         if hasattr(window, "statusBar"):
-            window.statusBar().showMessage(f"Mask brush: {mode} · drag on selected layer; Esc cancels", 5000)
+            window.statusBar().showMessage(
+                f"Mask brush: {mode} · drag inside the selected layer; Esc cancels", 5000
+            )
 
     def cancel_mask_brush(self) -> None:
         if self._mask_brush is not None:
@@ -249,13 +288,14 @@ class CanvasView(QGraphicsView):
             return None
         local = item.mapFromScene(scene_pos)
         rect = item.rect()
-        if rect.width() <= 0 or rect.height() <= 0:
+        if rect.width() <= 0 or rect.height() <= 0 or not rect.contains(local):
             return None
         image_w, image_h = self.scene_model.image_size(brush["instance_id"])
-        return (
-            (local.x() - rect.left()) / rect.width() * image_w,
-            (local.y() - rect.top()) / rect.height() * image_h,
-        )
+        x = (local.x() - rect.left()) / rect.width() * image_w
+        y = (local.y() - rect.top()) / rect.height() * image_h
+        if not (0.0 <= x < image_w and 0.0 <= y < image_h):
+            return None
+        return (x, y)
 
     def _commit_mask_brush(self) -> None:
         brush = self._mask_brush
@@ -269,10 +309,18 @@ class CanvasView(QGraphicsView):
         from ..commands import paint_instance_mask
 
         layers_dir = self.scene_model.layers_dir
-        base_dir = layers_dir.parent if layers_dir is not None else None
-        work_dir = Path(tempfile.mkdtemp(prefix="portrait-composer-mask-"))
-        run_command(
-            lambda document, image_sources: paint_instance_mask(
+        source_path = self.scene_model._resolve_image_path(brush["instance_id"])
+        base_dir = (
+            source_path.parent.parent if source_path is not None and source_path.parent.name == "layers"
+            else source_path.parent if source_path is not None
+            else layers_dir.parent if layers_dir is not None
+            else None
+        )
+        work_dir = Path(tempfile.gettempdir()) / "portrait-composer-mask" / uuid4().hex
+        result_holder = {}
+
+        def commit(document, image_sources):
+            result_holder["path"] = paint_instance_mask(
                 document,
                 image_sources,
                 brush["instance_id"],
@@ -280,10 +328,13 @@ class CanvasView(QGraphicsView):
                 points=brush["points"],
                 radius=brush["radius"],
                 mode=brush["mode"],
+                strength=brush["strength"],
                 work_dir=work_dir,
                 base_dir=base_dir,
             )
-        )
+
+        if run_command(commit) and result_holder.get("path") is None:
+            window.statusBar().showMessage("Mask stroke made no change; no history entry was added.", 4000)
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton or self.scene_model.document is None:
@@ -299,14 +350,22 @@ class CanvasView(QGraphicsView):
             if point is not None:
                 self.cancel_color_pick()
                 callback(point)
+            else:
+                window = self.window()
+                if hasattr(window, "statusBar"):
+                    window.statusBar().showMessage(self._color_pick_error, 5000)
             event.accept()
             return
         if self._mask_brush is not None:
             point = self._mask_image_point(scene_pos)
             if point is not None:
                 self._mask_brush["points"] = [point]
-                event.accept()
-                return
+            else:
+                window = self.window()
+                if hasattr(window, "statusBar"):
+                    window.statusBar().showMessage("Mask strokes must start inside the selected layer.", 4000)
+            event.accept()
+            return
         # BAKE owns its source selection and transient staging recipe.  A
         # canvas click in this context must not fall through to the normal
         # ASSEMBLE picker, otherwise an accidental click changes the inputs
@@ -501,6 +560,27 @@ class CanvasView(QGraphicsView):
             event.accept()
             return
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            if self.scene_model.donor_ghost.active:
+                if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+                    super().keyPressEvent(event)
+                    return
+                directions = {
+                    Qt.Key.Key_Left: (-1.0, 0.0),
+                    Qt.Key.Key_Right: (1.0, 0.0),
+                    Qt.Key.Key_Up: (0.0, -1.0),
+                    Qt.Key.Key_Down: (0.0, 1.0),
+                }
+                distance = 10.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1.0
+                dx, dy = directions[event.key()]
+                if self.scene_model.donor_ghost.nudge(dx * distance, dy * distance):
+                    window = self.window()
+                    if hasattr(window, "statusBar"):
+                        window.statusBar().showMessage(
+                            "Donor moved in document pixels · Arrow 1 px · Shift+Arrow 10 px · Import applies placement",
+                            4000,
+                        )
+                    event.accept()
+                    return
             if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
                 super().keyPressEvent(event)
             else:
