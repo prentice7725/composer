@@ -180,7 +180,13 @@ class AssemblyTreeFilter(QSortFilterProxyModel):
         if self.mode == "All":
             return True
         model = self.sourceModel()
-        item = model.itemFromIndex(model.index(source_row, 1, source_parent))
+        column_count = model.columnCount(source_parent) if model is not None else 0
+        if column_count == 0:
+            return False
+        metadata_column = 1 if column_count > 1 else 0
+        item = model.itemFromIndex(model.index(source_row, metadata_column, source_parent))
+        if item is None:
+            return False
         metadata = item.data(META_ROLE) or {}
         return {
             "Selected Source": (
