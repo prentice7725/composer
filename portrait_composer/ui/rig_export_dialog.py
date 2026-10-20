@@ -68,16 +68,18 @@ class RigExportReviewDialog(QDialog):
             f"Donor assets: {len(donors)}",
             f"Secondary regions: {len(intent.get('regions', {}))}",
             f"Attachments: {len(intent.get('attachments', {}))}",
-            f"Producer warnings: {len(self.warnings)}",
+            f"Warnings and limits: {len(self.warnings)}",
         ]
         title_text = "Export blocked" if self.errors else "Export ready with warnings" if self.warnings else "Export ready"
         title = QLabel(title_text)
+        self.status_label = title
         title.setAccessibleName("AutoRig export status")
         title.setStyleSheet("font-weight: 700;")
         detail = QLabel(
             "Resolve the following issues before export."
             if self.errors
-            else "Review producer warnings before export. This check does not validate runtime deformation."
+            else "Review source warnings and capability limits before export. Composer validates the bundle; "
+            "AutoRig performs the separate runtime preflight."
         )
         detail.setWordWrap(True)
 

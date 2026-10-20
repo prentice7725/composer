@@ -4,7 +4,7 @@
   "title": "Portrait Composer Rig Bundle v0.4",
   "type": "object",
   "required": [
-    "format", "version", "canvas", "layers", "draw_order", "variant_layers",
+    "format", "version", "canvas", "layers", "draw_order", "instance_draw_order", "variant_layers",
     "instances", "assets", "variant_sets", "expressions", "rig_intent", "donors",
     "source_metadata", "expression_intent"
   ],
@@ -23,6 +23,7 @@
     },
     "layers": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
     "draw_order": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "instance_draw_order": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
     "variant_layers": {
       "type": "object",
       "additionalProperties": {"type": "string", "pattern": "^variants/[^/]+\\.png$"}

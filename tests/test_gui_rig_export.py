@@ -25,6 +25,11 @@ def test_rig_export_review_reports_ready_contract(tmp_path: Path):
     review = RigExportReviewDialog(document, image_sources)
 
     assert review.errors == []
+    assert review.status_label.text() == "Export ready with warnings"
     assert "Visible canonical layers: 3" in review.list.item(0).text()
     assert review.list.findItems("[INFO] Donor assets: 0", Qt.MatchFlag.MatchExactly)
+    assert review.list.findItems(
+        "[WARN] AutoRig exports separate layer meshes; full-body joints, IK, and walking/gait generation are outside this contract",
+        Qt.MatchFlag.MatchExactly,
+    )
     review.close()

@@ -29,12 +29,17 @@ class RigBundleError(ValueError):
     pass
 
 
-_BUNDLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_BUNDLE_ID = re.compile(r'^[^<>:"/\\|?*\x00-\x1f]+$')
 
 
 def _safe_bundle_id(value: object) -> bool:
     """Whether an authored ID is safe to use as one bundle path component."""
-    return isinstance(value, str) and bool(_BUNDLE_ID.fullmatch(value)) and value not in {".", ".."}
+    if not isinstance(value, str) or value in {".", ".."} or value != value.strip():
+        return False
+    if value.endswith(".") or not _BUNDLE_ID.fullmatch(value):
+        return False
+    device_name = value.split(".", 1)[0].upper()
+    return device_name not in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 def _visual_ops_root(source_path: Path) -> Path:
@@ -178,7 +183,7 @@ def validate_exported_rig_bundle(out_dir: Path) -> list[str]:
     if manifest.get("version") != RIG_BUNDLE_VERSION:
         errors.append(f"unexpected Rig Bundle version: {manifest.get('version')!r}")
     required = (
-        "canvas", "layers", "draw_order", "variant_layers", "instances", "assets",
+        "canvas", "layers", "draw_order", "instance_draw_order", "variant_layers", "instances", "assets",
         "variant_sets", "expressions", "rig_intent", "donors", "source_metadata",
         "expression_intent",
     )
@@ -187,6 +192,7 @@ def validate_exported_rig_bundle(out_dir: Path) -> list[str]:
             errors.append(f"manifest missing required field {key!r}")
     visible_ids = manifest.get("layers", [])
     draw_order = manifest.get("draw_order", [])
+    instance_draw_order = manifest.get("instance_draw_order", [])
     instances = manifest.get("instances", {})
     assets = manifest.get("assets", {})
     variant_sets = manifest.get("variant_sets", {})
@@ -196,6 +202,13 @@ def validate_exported_rig_bundle(out_dir: Path) -> list[str]:
         visible_ids = []
     if not isinstance(draw_order, list) or draw_order != visible_ids:
         errors.append("manifest.draw_order must match manifest.layers in visible draw order")
+    if (
+        not isinstance(instance_draw_order, list)
+        or any(not _safe_bundle_id(item) for item in instance_draw_order)
+        or len(set(instance_draw_order)) != len(instance_draw_order)
+    ):
+        errors.append("manifest.instance_draw_order must be an array of unique instance ids")
+        instance_draw_order = []
     if len(set(visible_ids)) != len(visible_ids):
         errors.append("manifest.layers must not contain duplicate instance ids")
     if not isinstance(instances, dict):
@@ -248,6 +261,10 @@ def validate_exported_rig_bundle(out_dir: Path) -> list[str]:
         if not (out_dir / expected).is_file():
             errors.append(f"variant layer artifact missing for {instance_id!r}: {relative!r}")
     exported_ids = set(visible_ids) | set(variant_layers)
+    if set(instance_draw_order) != exported_ids:
+        errors.append("manifest.instance_draw_order must contain every and only exported instance")
+    if [item for item in instance_draw_order if item in visible_ids] != visible_ids:
+        errors.append("manifest.instance_draw_order must preserve visible draw_order")
     for instance_id in sorted(variant_members - exported_ids):
         errors.append(f"VariantSet member {instance_id!r} has no exported layer artifact")
     for instance_id, instance in instances.items():
@@ -450,6 +467,7 @@ def _write_rig_bundle_stage(document, image_sources: dict, out_dir: Path, *, ref
         "canvas": dict(document.composition.get("canvas", {})),
         "layers": visible_ids,
         "draw_order": list(visible_ids),
+        "instance_draw_order": [instance_id for instance_id in all_order if instance_id in export_ids],
         "variant_layers": {
             instance_id: f"variants/{instance_id}.png" for instance_id in hidden_variant_ids
         },
