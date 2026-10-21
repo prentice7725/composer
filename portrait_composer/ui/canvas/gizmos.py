@@ -66,6 +66,7 @@ class _Drag:
     image_w: float
     image_h: float
     start_transform: dict
+    start_bounds: Optional[QRectF] = None
     inverse: object = None
     center_scene: Optional[QPointF] = None
     start_angle: float = 0.0
@@ -79,6 +80,7 @@ class _GroupDrag:
     target_ids: list[str]
     start_transforms: dict
     pivot: QPointF
+    start_bounds: QRectF
     start_angle: float = 0.0
     start_distance: float = 1.0
     dx: float = 0.0
@@ -229,6 +231,7 @@ class TransformGizmo:
                 "scale_y": transform.scale_y,
                 "rotation": transform.rotation,
             },
+            start_bounds=QRectF(self.target_item.sceneBoundingRect()),
         )
         if kind == "scale":
             inverse, invertible = self.target_item.sceneTransform().inverted()
@@ -303,6 +306,7 @@ class TransformGizmo:
             target_ids=targets,
             start_transforms=start_transforms,
             pivot=pivot,
+            start_bounds=QRectF(bounds),
             start_angle=math.degrees(math.atan2(delta.y(), delta.x())),
             start_distance=max(1.0, math.hypot(delta.x(), delta.y())),
         )
@@ -420,6 +424,7 @@ class TransformGizmo:
             return
         if isinstance(drag, _GroupDrag):
             self.scene.clear_transform_preview(drag.target_ids)
+            self.scene.set_snap_guides()
             return
         self.scene.preview_state.clear()
         if self.target_item is not None:
@@ -428,6 +433,7 @@ class TransformGizmo:
             self.target_item.setRotation(drag.start_rotation)
             self.target_item.setTransformOriginPoint(drag.start_rect.center())
         self.reposition()
+        self.scene.set_snap_guides()
 
     def end_drag(self) -> Optional[dict]:
         drag = self.drag

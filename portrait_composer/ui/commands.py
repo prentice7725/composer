@@ -22,7 +22,7 @@ from ..donors import DonorImportResult, import_donor
 from ..donor_slots import clear_donor_slot, set_donor_slot
 from ..expressions import apply_expression_preset, create_expression_preset, update_expression_preset
 from ..profiles import apply_candidate as _apply_bake_candidate
-from ..visual_ops import add_visual_op, reset_visual_ops, update_visual_op
+from ..visual_ops import add_visual_op, copy_visual_ops as _copy_visual_ops, reset_visual_ops, update_visual_op
 from ..color_match import create_color_match_op
 from ..remap import apply_remap_resolution as _apply_remap_resolution
 from ..external_edit import apply_ora_reimport as _apply_ora_reimport
@@ -334,6 +334,20 @@ def update_instance_mask(document, image_sources, instance_id: str, *, op_id: st
 def reset_instance_masks(document, image_sources, instance_id: str) -> None:
     _require_unlocked(document, [instance_id])
     reset_visual_ops(document, instance_id)
+
+
+def copy_instance_visual_ops(
+    document, image_sources, source_instance_id: str, target_instance_ids, *, mode: str = "append"
+) -> bool:
+    """Copy a layer's complete ordered VisualOps stack to selected targets."""
+    source_id = str(source_instance_id)
+    _instance(document, source_id)
+    targets = list(dict.fromkeys(str(value) for value in target_instance_ids if value))
+    targets = [instance_id for instance_id in targets if instance_id != source_id]
+    for instance_id in targets:
+        _instance(document, instance_id)
+    _require_unlocked(document, targets)
+    return _copy_visual_ops(document, source_id, targets, mode=mode)
 
 
 def paint_instance_mask(

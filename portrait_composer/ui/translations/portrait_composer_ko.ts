@@ -19,6 +19,11 @@
     <message><source>Redo</source><translation>다시 실행</translation></message>
     <message><source>Fit Canvas</source><translation>캔버스 맞춤</translation></message>
     <message><source>Fit Selection</source><translation>선택 영역 맞춤</translation></message>
+    <message><source>Snap to Canvas and Layers</source><translation>캔버스·레이어에 스냅</translation></message>
+    <message><source>VisualOps batch copy</source><translation>VisualOps 일괄 복제</translation></message>
+    <message><source>Append Stack</source><translation>스택 추가</translation></message>
+    <message><source>Replace Stacks</source><translation>스택 교체</translation></message>
+    <message><source>Unlock layers before editing them together. A locked VisualOps source can still be copied to unlocked targets.</source><translation>여러 레이어를 편집하려면 대상 레이어의 잠금을 해제하세요. 잠긴 레이어도 VisualOps 원본으로 사용할 수 있습니다.</translation></message>
     <message><source>Focus Tree Search</source><translation>트리 검색으로 이동</translation></message>
     <message><source>Harvest</source><translation>수확</translation></message>
     <message><source>Donor Align</source><translation>Donor 정렬</translation></message>

@@ -1,5 +1,5 @@
 """Contextual Inspector -- read-only identity/provenance plus editable
-Transform, Visibility and Opacity for the current single selection (C5-B).
+Transform, Visibility, Opacity and VisualOps for the current selection.
 
 Every edit commits through MainWindow.run_command, the same public core API
 entry point the canvas gizmo uses (directive #19); the Inspector never
@@ -56,6 +56,7 @@ from ..commands import (
     align_instance_to_target,
     fit_instance_to_target,
     reset_instance_masks,
+    copy_instance_visual_ops,
     update_instance_mask,
 )
 from ..diagnostics import provenance_text
@@ -139,6 +140,8 @@ class InspectorDock(QDockWidget):
             self.form.addRow(QLabel("Selection"), QLabel("Nothing selected"))
             return
         if len(selected_ids) > 1:
+            window = self._main_window()
+            translate = window.tr if window is not None else lambda text: text
             self._instance_id = None
             self._multi_instance_ids = [
                 instance_id for instance_id in selected_ids if instance_id in document.instances
@@ -153,7 +156,12 @@ class InspectorDock(QDockWidget):
                 if (document.instance_authoring or {}).get(instance_id, {}).get("locked")
             ]
             if locked_ids:
-                note = QLabel("Unlock all selected layers to edit them together.")
+                note = QLabel(
+                    translate(
+                        "Unlock layers before editing them together. A locked VisualOps source can still be "
+                        "copied to unlocked targets."
+                    )
+                )
                 note.setWordWrap(True)
                 self.form.addRow(QLabel("Edit lock"), note)
             enabled = not locked_ids
@@ -226,6 +234,64 @@ class InspectorDock(QDockWidget):
                 )
             )
             self.form.addRow(QLabel("Relative move"), move_row)
+
+            source_row = QWidget()
+            source_layout = QGridLayout(source_row)
+            source_layout.setContentsMargins(0, 0, 0, 0)
+            source_box = QComboBox()
+            source_box.setAccessibleName("VisualOps source layer")
+            for instance_id in self._multi_instance_ids:
+                authoring = (document.instance_authoring or {}).get(instance_id, {})
+                display_name = authoring.get("display_name") or instance_id
+                source_box.addItem(f"{display_name} · {instance_id}", instance_id)
+            append_button = QPushButton(translate("Append Stack"))
+            append_button.setAccessibleName("Append VisualOps source stack to selected layers")
+            append_button.setToolTip(
+                "Append a copy of the source layer's ordered VisualOps to the other selected layers"
+            )
+            replace_button = QPushButton(translate("Replace Stacks"))
+            replace_button.setAccessibleName("Replace selected layers VisualOps with source stack")
+            replace_button.setToolTip(
+                "Replace every other selected layer's VisualOps with the source stack; Undo restores them"
+            )
+            source_layout.addWidget(source_box, 0, 0, 1, 2)
+            source_layout.addWidget(append_button, 1, 0)
+            source_layout.addWidget(replace_button, 1, 1)
+
+            def update_visual_op_copy_enabled(_index=None) -> None:
+                source_id = source_box.currentData()
+                targets = [value for value in self._multi_instance_ids if value != source_id]
+                locked_targets = any(
+                    (document.instance_authoring or {}).get(value, {}).get("locked")
+                    for value in targets
+                )
+                source = document.instances.get(source_id) if source_id else None
+                target_has_ops = any(document.instances[value].visual_ops for value in targets)
+                append_button.setEnabled(
+                    bool(source and source.visual_ops and targets and not locked_targets)
+                )
+                replace_button.setEnabled(
+                    bool(source and targets and not locked_targets and (source.visual_ops or target_has_ops))
+                )
+
+            def copy_visual_op_stack(mode: str) -> None:
+                source_id = source_box.currentData()
+                ids = list(self._multi_instance_ids)
+                if source_id is None:
+                    return
+                self._defer_multi_command(
+                    ids,
+                    lambda doc, sources, source=source_id, selected=ids, copy_mode=mode:
+                    copy_instance_visual_ops(
+                        doc, sources, source, selected, mode=copy_mode
+                    ),
+                )
+
+            source_box.currentIndexChanged.connect(update_visual_op_copy_enabled)
+            append_button.clicked.connect(lambda: copy_visual_op_stack("append"))
+            replace_button.clicked.connect(lambda: copy_visual_op_stack("replace"))
+            update_visual_op_copy_enabled()
+            self.form.addRow(QLabel(translate("VisualOps batch copy")), source_row)
             return
         self._multi_instance_ids = []
         instance_id = selected_ids[0]

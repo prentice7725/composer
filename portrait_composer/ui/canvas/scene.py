@@ -5,9 +5,8 @@ from time import perf_counter
 from pathlib import Path
 
 from PIL import Image, ImageChops
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QImage, QPixmap
-from PySide6.QtGui import QPen
+from PySide6.QtCore import QLineF, QRectF, Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene
 
 from ...instances import Transform
@@ -44,6 +43,8 @@ class CanvasScene(QGraphicsScene):
         self._flicker_timer: QTimer | None = None
         self._flicker_frames: tuple[Image.Image, Image.Image] | None = None
         self._flicker_phase = False
+        self._snap_guide_x: float | None = None
+        self._snap_guide_y: float | None = None
         self.last_render_ms = 0.0
         self.preview_state = PreviewState()
         self.variant_preview_active = False
@@ -63,6 +64,7 @@ class CanvasScene(QGraphicsScene):
     ) -> None:
         # Detach the gizmo's handle items before clear() deletes the scene's
         # graphics items out from under them.
+        self.set_snap_guides()
         self.gizmo.detach()
         self.clear_donor_ghost()
         self.region_edit.clear()
@@ -181,6 +183,28 @@ class CanvasScene(QGraphicsScene):
 
     def set_context(self, context: str) -> None:
         self.context = context
+
+    def set_snap_guides(self, *, x: float | None = None, y: float | None = None) -> None:
+        if self._snap_guide_x == x and self._snap_guide_y == y:
+            return
+        self._snap_guide_x = x
+        self._snap_guide_y = y
+        self.update()
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        super().drawForeground(painter, rect)
+        if self._snap_guide_x is None and self._snap_guide_y is None:
+            return
+        painter.save()
+        pen = QPen(QColor("#ffd166"), 0.0, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        bounds = rect
+        if self._snap_guide_x is not None:
+            painter.drawLine(QLineF(self._snap_guide_x, bounds.top(), self._snap_guide_x, bounds.bottom()))
+        if self._snap_guide_y is not None:
+            painter.drawLine(QLineF(bounds.left(), self._snap_guide_y, bounds.right(), self._snap_guide_y))
+        painter.restore()
 
     def preview_transforms(self, transforms: dict[str, Transform]) -> None:
         """Render transient transform overrides through the canonical compositor."""

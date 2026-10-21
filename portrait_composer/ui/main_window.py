@@ -339,6 +339,15 @@ class MainWindow(QMainWindow):
         fit_selection.triggered.connect(self.canvas.fit_selection)
         view_menu.addAction(fit)
         view_menu.addAction(fit_selection)
+        snap_action = QAction("Snap to Canvas and Layers", self)
+        snap_action.setCheckable(True)
+        snap_action.setChecked(self.session.canvas_snap)
+        snap_action.setToolTip(
+            "When moving, align selection edges or centers to the canvas and other visible layers"
+        )
+        snap_action.toggled.connect(self._set_canvas_snap)
+        view_menu.addAction(snap_action)
+        self.canvas_snap_action = snap_action
         self.production_toolbar.addSeparator()
         self.production_toolbar.addAction(fit)
         self.production_toolbar.addAction(fit_selection)
@@ -618,6 +627,14 @@ class MainWindow(QMainWindow):
         tree_filter_mode = str(self.settings.value("tree_filter_mode", "All") or "All")
         if self.tree_dock.filter_selector.findText(tree_filter_mode) >= 0:
             self.tree_dock.filter_selector.setCurrentText(tree_filter_mode)
+        snap_setting = self.settings.value("canvas_snap_enabled", False)
+        if isinstance(snap_setting, str):
+            snap_enabled = snap_setting.strip().casefold() in {"1", "true", "yes", "on"}
+        else:
+            snap_enabled = bool(snap_setting)
+        self.session.canvas_snap = snap_enabled
+        if hasattr(self, "canvas_snap_action"):
+            self.canvas_snap_action.setChecked(snap_enabled)
         try:
             zoom = float(self.settings.value("canvas_zoom", 1.0))
             pan = (
@@ -639,6 +656,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("bake_workflow", self.bake_workbench.workflow_mode.currentData() or "simple")
         self.settings.setValue("tree_filter", self.tree_dock.search.text())
         self.settings.setValue("tree_filter_mode", self.tree_dock.filter_selector.currentText())
+        self.settings.setValue("canvas_snap_enabled", self.session.canvas_snap)
         self.settings.setValue("recent_files", self.recent_files)
         self.settings.sync()
 
@@ -1220,12 +1238,26 @@ class MainWindow(QMainWindow):
             5000,
         )
 
+    def _set_canvas_snap(self, enabled: bool) -> None:
+        self.session.canvas_snap = bool(enabled)
+        if hasattr(self, "canvas_snap_action") and self.canvas_snap_action.isChecked() != self.session.canvas_snap:
+            self.canvas_snap_action.setChecked(self.session.canvas_snap)
+        self.settings.setValue("canvas_snap_enabled", self.session.canvas_snap)
+        if hasattr(self, "canvas"):
+            self.canvas.scene_model.set_snap_guides()
+        message = (
+            "Canvas snapping enabled: layer edges/centers and canvas bounds."
+            if self.session.canvas_snap else "Canvas snapping disabled."
+        )
+        self.statusBar().showMessage(message, 4000)
+
     def _show_canvas_shortcuts(self) -> None:
         QMessageBox.information(
             self,
             "Canvas Shortcuts",
             "V  Select tool\nG  Move tool\nR  Rotate tool\nS  Scale tool\n"
             "Ctrl+click  Add or remove a layer from the selection; group scale/rotation uses its center\n"
+            "View > Snap to Canvas and Layers  Align moving edges/centers; dashed guides show the snap target\n"
             "Arrow keys  Move selection by 1 document pixel; move an active donor preview while aligning\n"
             "Shift+Arrow  Move selection or donor preview by 10 document pixels\n"
             "Hold an arrow and release to make one undoable move; Esc cancels.\n"

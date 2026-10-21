@@ -13,7 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsView
 
@@ -155,6 +155,60 @@ class CanvasView(QGraphicsView):
             lambda document, image_sources: move_instances_relative(
                 document, image_sources, gesture["selection"], dx=dx, dy=dy
             )
+        )
+
+    def _snap_drag_position(self, scene_pos):
+        drag = self.scene_model.gizmo.drag
+        if not self.session.canvas_snap or drag is None or drag.kind != "move":
+            self.scene_model.set_snap_guides()
+            return scene_pos
+        bounds = drag.start_bounds
+        document = self.scene_model.document
+        if bounds is None or document is None:
+            self.scene_model.set_snap_guides()
+            return scene_pos
+
+        if hasattr(drag, "target_ids"):
+            affected = set(drag.target_ids)
+        else:
+            from ..commands import selection_move_targets
+
+            affected = set(selection_move_targets(document, [self.scene_model.gizmo.instance_id]))
+
+        canvas = self.scene_model.sceneRect()
+        x_guides = [canvas.left(), canvas.center().x(), canvas.right()]
+        y_guides = [canvas.top(), canvas.center().y(), canvas.bottom()]
+        for instance_id, item in self.scene_model._hit_items.items():
+            if instance_id in affected:
+                continue
+            rect = item.sceneBoundingRect()
+            x_guides.extend((rect.left(), rect.center().x(), rect.right()))
+            y_guides.extend((rect.top(), rect.center().y(), rect.bottom()))
+
+        current_delta = scene_pos - drag.start_scene_pos
+        zoom = max(0.001, abs(float(self.transform().m11())))
+        tolerance = 8.0 / zoom
+
+        def snap_axis(features, guides, delta):
+            best = None
+            for feature in features:
+                current = feature + delta
+                for guide in guides:
+                    correction = guide - current
+                    if abs(correction) <= tolerance and (best is None or abs(correction) < abs(best[0])):
+                        best = (correction, guide)
+            return (delta + best[0], best[1]) if best is not None else (delta, None)
+
+        dx, guide_x = snap_axis(
+            (bounds.left(), bounds.center().x(), bounds.right()), x_guides, current_delta.x()
+        )
+        dy, guide_y = snap_axis(
+            (bounds.top(), bounds.center().y(), bounds.bottom()), y_guides, current_delta.y()
+        )
+        self.scene_model.set_snap_guides(x=guide_x, y=guide_y)
+        return QPointF(
+            scene_pos.x() + dx - current_delta.x(),
+            scene_pos.y() + dy - current_delta.y(),
         )
 
     def begin_color_pick(self, instance_id, callback, *, source_image=None) -> None:
@@ -450,7 +504,8 @@ class CanvasView(QGraphicsView):
             event.accept()
             return
         if self.scene_model.gizmo.drag is not None:
-            self.scene_model.gizmo.update_drag(self.mapToScene(event.position().toPoint()), shift)
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self.scene_model.gizmo.update_drag(self._snap_drag_position(scene_pos), shift)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -472,6 +527,7 @@ class CanvasView(QGraphicsView):
             return
         if self.scene_model.gizmo.drag is not None:
             fields = self.scene_model.gizmo.end_drag()
+            self.scene_model.set_snap_guides()
             if fields:
                 self._commit_transform(fields)
             event.accept()
@@ -637,6 +693,7 @@ class CanvasView(QGraphicsView):
             return
         if event.key() == Qt.Key.Key_Escape and self.scene_model.gizmo.drag is not None:
             self.scene_model.gizmo.cancel_drag()
+            self.scene_model.set_snap_guides()
             event.accept()
             return
         if event.key() == Qt.Key.Key_Escape:
