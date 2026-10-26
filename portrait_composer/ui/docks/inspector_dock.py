@@ -1,5 +1,5 @@
 """Contextual Inspector -- read-only identity/provenance plus editable
-Transform, Visibility and Opacity for the current single selection (C5-B).
+Transform, Visibility, Opacity and VisualOps for the current selection.
 
 Every edit commits through MainWindow.run_command, the same public core API
 entry point the canvas gizmo uses (directive #19); the Inspector never
@@ -36,13 +36,17 @@ from PySide6.QtWidgets import (
 )
 
 from ...slots import SLOT_VOCABULARY
-from ...color_match import color_match_params
+from ...color_match import color_match_params, sample_patch
+from ...visual_ops import apply_visual_ops
 from ..commands import (
     set_instance_opacity,
     set_instance_plane,
     set_instance_slot,
     set_instance_transform,
     set_instance_visible,
+    set_instances_opacity,
+    set_instances_visible,
+    move_instances_relative,
     add_instance_mask,
     add_instance_quad_warp,
     add_instance_color,
@@ -52,6 +56,7 @@ from ..commands import (
     align_instance_to_target,
     fit_instance_to_target,
     reset_instance_masks,
+    copy_instance_visual_ops,
     update_instance_mask,
 )
 from ..diagnostics import provenance_text
@@ -72,10 +77,22 @@ class InspectorDock(QDockWidget):
         scroll.setWidget(self.body)
         self.setWidget(scroll)
         self._instance_id: str | None = None
+        self._multi_instance_ids: list[str] = []
         self._visual_ops: dict[str, dict] = {}
         self._advanced_button: QToolButton | None = None
         self._advanced_row_start: int | None = None
+        self._advanced_expanded = self._read_advanced_preference()
         selection_model.subscribe(self.refresh)
+
+    def _read_advanced_preference(self) -> bool:
+        window = self.parent()
+        settings = getattr(window, "settings", None)
+        if settings is None:
+            return False
+        value = settings.value("inspector_advanced_expanded", False)
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on"}
+        return bool(value)
 
     def _clear(self) -> None:
         while self.form.rowCount():
@@ -84,18 +101,31 @@ class InspectorDock(QDockWidget):
         self._advanced_row_start = None
 
     def _set_advanced(self, expanded: bool) -> None:
+        self._advanced_expanded = bool(expanded)
+        window = self.parent()
+        settings = getattr(window, "settings", None)
+        if settings is not None:
+            settings.setValue("inspector_advanced_expanded", self._advanced_expanded)
         button = self._advanced_button
         start = self._advanced_row_start
         if button is None or start is None:
             return
-        button.setChecked(expanded)
-        button.setText("▾ Advanced" if expanded else "▸ Advanced")
+        button.setChecked(self._advanced_expanded)
+        button.setText("▾ Advanced" if self._advanced_expanded else "▸ Advanced")
+        button.setAccessibleName(
+            "Hide advanced inspector controls" if self._advanced_expanded
+            else "Show advanced inspector controls"
+        )
+        button.setToolTip(
+            "Collapse advanced inspector controls" if self._advanced_expanded
+            else "Expand advanced inspector controls"
+        )
         for row in range(start, self.form.rowCount()):
             for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
                 item = self.form.itemAt(row, role)
                 widget = item.widget() if item is not None else None
                 if widget is not None:
-                    widget.setVisible(expanded)
+                    widget.setVisible(self._advanced_expanded)
 
     def _main_window(self):
         window = self.parent()
@@ -106,20 +136,179 @@ class InspectorDock(QDockWidget):
         document = getattr(self.parent(), "document", None)
         if document is None or not selected_ids:
             self._instance_id = None
+            self._multi_instance_ids = []
             self.form.addRow(QLabel("Selection"), QLabel("Nothing selected"))
             return
         if len(selected_ids) > 1:
+            window = self._main_window()
+            translate = window.tr if window is not None else lambda text: text
             self._instance_id = None
-            self.form.addRow(QLabel("Selection"), QLabel(f"{len(selected_ids)} instances"))
+            self._multi_instance_ids = [
+                instance_id for instance_id in selected_ids if instance_id in document.instances
+            ]
+            instances = [document.instances[instance_id] for instance_id in self._multi_instance_ids]
+            if not instances:
+                self.form.addRow(QLabel("Selection"), QLabel("Nothing selected"))
+                return
+            self.form.addRow(QLabel("Selection"), QLabel(f"{len(instances)} instances"))
+            locked_ids = [
+                instance_id for instance_id in self._multi_instance_ids
+                if (document.instance_authoring or {}).get(instance_id, {}).get("locked")
+            ]
+            if locked_ids:
+                note = QLabel(
+                    translate(
+                        "Unlock layers before editing them together. A locked VisualOps source can still be "
+                        "copied to unlocked targets."
+                    )
+                )
+                note.setWordWrap(True)
+                self.form.addRow(QLabel("Edit lock"), note)
+            enabled = not locked_ids
+
+            visibility_values = {bool(instance.visible) for instance in instances}
+            visible_box = QCheckBox()
+            visible_box.setTristate(True)
+            visible_box.setAccessibleName("Selected layers visibility")
+            visible_box.setToolTip("Set visibility for every selected layer")
+            if len(visibility_values) == 1:
+                visible_box.setCheckState(
+                    Qt.CheckState.Checked if next(iter(visibility_values)) else Qt.CheckState.Unchecked
+                )
+            else:
+                visible_box.setCheckState(Qt.CheckState.PartiallyChecked)
+                visible_box.setText("Mixed")
+            visible_box.setEnabled(enabled)
+            visible_box.clicked.connect(
+                lambda checked, ids=list(self._multi_instance_ids): self._defer_multi_command(
+                    ids,
+                    lambda doc, sources: set_instances_visible(doc, sources, ids, checked),
+                )
+            )
+            self.form.addRow(QLabel("Visible"), visible_box)
+
+            opacity_values = [float(instance.opacity) for instance in instances]
+            mixed_opacity = max(opacity_values) - min(opacity_values) > 1e-9
+            opacity_box = self._spin(0.0, 1.0, 0.05, opacity_values[0])
+            opacity_box.setAccessibleName("Set opacity for selected layers")
+            opacity_box.setToolTip("Enter one opacity for all selected layers")
+            opacity_box.setEnabled(enabled)
+            opacity_row = QWidget()
+            opacity_layout = QHBoxLayout(opacity_row)
+            opacity_layout.setContentsMargins(0, 0, 0, 0)
+            opacity_layout.addWidget(opacity_box)
+            if mixed_opacity:
+                mixed_label = QLabel("Mixed values")
+                mixed_label.setAccessibleName("Selected layers have mixed opacity values")
+                opacity_layout.addWidget(mixed_label)
+            opacity_box.editingFinished.connect(
+                lambda spin=opacity_box, ids=list(self._multi_instance_ids): self._defer_multi_command(
+                    ids,
+                    lambda doc, sources: set_instances_opacity(doc, sources, ids, spin.value()),
+                )
+            )
+            self.form.addRow(QLabel("Opacity"), opacity_row)
+
+            move_row = QWidget()
+            move_layout = QGridLayout(move_row)
+            move_layout.setContentsMargins(0, 0, 0, 0)
+            dx_box = self._spin(-100000.0, 100000.0, 1.0, 0.0)
+            dy_box = self._spin(-100000.0, 100000.0, 1.0, 0.0)
+            dx_box.setAccessibleName("Relative move X in document pixels")
+            dy_box.setAccessibleName("Relative move Y in document pixels")
+            move_button = QPushButton("Move")
+            move_button.setAccessibleName("Move selected layers by relative document pixels")
+            move_button.setEnabled(enabled)
+            move_layout.addWidget(QLabel("ΔX"), 0, 0)
+            move_layout.addWidget(dx_box, 0, 1)
+            move_layout.addWidget(QLabel("ΔY"), 1, 0)
+            move_layout.addWidget(dy_box, 1, 1)
+            move_layout.addWidget(move_button, 0, 2, 2, 1)
+            move_button.clicked.connect(
+                lambda _checked=False, ids=list(self._multi_instance_ids), x=dx_box, y=dy_box:
+                self._defer_multi_command(
+                    ids,
+                    lambda doc, sources: move_instances_relative(
+                        doc, sources, ids, dx=x.value(), dy=y.value()
+                    ),
+                )
+            )
+            self.form.addRow(QLabel("Relative move"), move_row)
+
+            source_row = QWidget()
+            source_layout = QGridLayout(source_row)
+            source_layout.setContentsMargins(0, 0, 0, 0)
+            source_box = QComboBox()
+            source_box.setAccessibleName("VisualOps source layer")
+            for instance_id in self._multi_instance_ids:
+                authoring = (document.instance_authoring or {}).get(instance_id, {})
+                display_name = authoring.get("display_name") or instance_id
+                source_box.addItem(f"{display_name} · {instance_id}", instance_id)
+            append_button = QPushButton(translate("Append Stack"))
+            append_button.setAccessibleName("Append VisualOps source stack to selected layers")
+            append_button.setToolTip(
+                "Append a copy of the source layer's ordered VisualOps to the other selected layers"
+            )
+            replace_button = QPushButton(translate("Replace Stacks"))
+            replace_button.setAccessibleName("Replace selected layers VisualOps with source stack")
+            replace_button.setToolTip(
+                "Replace every other selected layer's VisualOps with the source stack; Undo restores them"
+            )
+            source_layout.addWidget(source_box, 0, 0, 1, 2)
+            source_layout.addWidget(append_button, 1, 0)
+            source_layout.addWidget(replace_button, 1, 1)
+
+            def update_visual_op_copy_enabled(_index=None) -> None:
+                source_id = source_box.currentData()
+                targets = [value for value in self._multi_instance_ids if value != source_id]
+                locked_targets = any(
+                    (document.instance_authoring or {}).get(value, {}).get("locked")
+                    for value in targets
+                )
+                source = document.instances.get(source_id) if source_id else None
+                target_has_ops = any(document.instances[value].visual_ops for value in targets)
+                append_button.setEnabled(
+                    bool(source and source.visual_ops and targets and not locked_targets)
+                )
+                replace_button.setEnabled(
+                    bool(source and targets and not locked_targets and (source.visual_ops or target_has_ops))
+                )
+
+            def copy_visual_op_stack(mode: str) -> None:
+                source_id = source_box.currentData()
+                ids = list(self._multi_instance_ids)
+                if source_id is None:
+                    return
+                self._defer_multi_command(
+                    ids,
+                    lambda doc, sources, source=source_id, selected=ids, copy_mode=mode:
+                    copy_instance_visual_ops(
+                        doc, sources, source, selected, mode=copy_mode
+                    ),
+                )
+
+            source_box.currentIndexChanged.connect(update_visual_op_copy_enabled)
+            append_button.clicked.connect(lambda: copy_visual_op_stack("append"))
+            replace_button.clicked.connect(lambda: copy_visual_op_stack("replace"))
+            update_visual_op_copy_enabled()
+            self.form.addRow(QLabel(translate("VisualOps batch copy")), source_row)
             return
+        self._multi_instance_ids = []
         instance_id = selected_ids[0]
         instance = document.instances.get(instance_id)
         if instance is None:
             self._instance_id = None
             return
         self._instance_id = instance_id
+        authoring = (document.instance_authoring or {}).get(instance_id, {})
+        locked = bool(authoring.get("locked"))
         asset = document.assets.get(instance.asset_ref)
         self.form.addRow(QLabel("Identity"), QLabel(instance_id))
+        self.form.addRow(QLabel("Display name"), QLabel(authoring.get("display_name") or instance_id))
+        if locked:
+            lock_note = QLabel("Locked — unlock this layer in the Assembly Tree to edit")
+            lock_note.setWordWrap(True)
+            self.form.addRow(QLabel("Edit lock"), lock_note)
         self.form.addRow(QLabel("Asset"), QLabel(instance.asset_ref))
         self.form.addRow(QLabel("Semantic"), QLabel(asset.semantic if asset else "—"))
         visible_box = QCheckBox()
@@ -135,7 +324,6 @@ class InspectorDock(QDockWidget):
         summary_rows = self.form.rowCount()
         self._advanced_button = QToolButton()
         self._advanced_button.setCheckable(True)
-        self._advanced_button.setAccessibleName("Show advanced inspector controls")
         self._advanced_button.clicked.connect(self._set_advanced)
         self.form.insertRow(summary_rows, self._advanced_button)
         self._advanced_row_start = summary_rows + 1
@@ -233,7 +421,15 @@ class InspectorDock(QDockWidget):
             box.setAccessibleName(f"Transform {name}")
             box.editingFinished.connect(lambda field_name=name, spin=box: self._commit_transform_field(field_name, spin.value()))
             self.form.addRow(QLabel(name), box)
-        self._set_advanced(False)
+        self._set_advanced(self._advanced_expanded)
+        if locked:
+            for widget in self.body.findChildren(QWidget):
+                if widget is self._advanced_button:
+                    continue
+                if widget.accessibleName().endswith("details"):
+                    continue
+                if isinstance(widget, (QCheckBox, QComboBox, QDoubleSpinBox, QPushButton, QToolButton)):
+                    widget.setEnabled(False)
 
     def _add_visual_ops_controls(self, instance) -> None:
         """Compact non-destructive VisualOps controls."""
@@ -299,11 +495,19 @@ class InspectorDock(QDockWidget):
             radius.setAccessibleName("Mask brush radius")
             brush_layout.addWidget(QLabel("Radius"), 2, 0)
             brush_layout.addWidget(radius, 2, 1)
+            strength = self._spin(0.0, 100.0, 5.0, 100.0)
+            strength.setSuffix(" %")
+            strength.setAccessibleName("Mask brush strength")
+            brush_layout.addWidget(QLabel("Strength"), 3, 0)
+            brush_layout.addWidget(strength, 3, 1)
             brush_button = QPushButton("Paint on Canvas")
             brush_button.setAccessibleName("Enable mask brush")
+            brush_button.setToolTip("Drag inside the selected layer. Esc cancels the stroke; release commits one undoable stroke.")
             brush_button.clicked.connect(
-                lambda checked=False, selector=mask_selector, mode=mode_selector, spin=radius:
-                self._enable_mask_brush(selector.currentData(), mode.currentData(), spin.value())
+                lambda checked=False, selector=mask_selector, mode=mode_selector, spin=radius, amount=strength:
+                self._enable_mask_brush(
+                    selector.currentData(), mode.currentData(), spin.value(), amount.value() / 100.0
+                )
             )
             self.form.addRow(QLabel("Mask Brush"), brush_box)
             self.form.addRow(QLabel(""), brush_button)
@@ -393,11 +597,13 @@ class InspectorDock(QDockWidget):
             index += 1
         window.run_command(lambda document, image_sources: add_instance_mask(document, image_sources, instance_id, op_id=op_id, path=path))
 
-    def _enable_mask_brush(self, op_id: str, mode: str, radius: float) -> None:
+    def _enable_mask_brush(self, op_id: str, mode: str, radius: float, strength: float) -> None:
         window = self._main_window()
         if window is None or self._instance_id is None:
             return
-        window.canvas.enable_mask_brush(self._instance_id, op_id, radius=radius, mode=mode)
+        window.canvas.enable_mask_brush(
+            self._instance_id, op_id, radius=radius, mode=mode, strength=strength
+        )
 
     def _add_quad_warp(self, instance) -> None:
         window = self._main_window()
@@ -444,11 +650,43 @@ class InspectorDock(QDockWidget):
         if source_path is None or not Path(source_path).exists() or target_image is None:
             window.statusBar().showMessage("Color Match needs a selected layer and a rendered reference.", 5000)
             return
-        with Image.open(source_path) as raw:
-            source_image = raw.convert("RGBA")
+        target_image = target_image.copy()
+        scene = window.canvas.scene_model
+        if scene.image_sources is not None:
+            visual_ops_root = None
+            for source in scene.image_sources.values():
+                if source:
+                    candidate = Path(source)
+                    visual_ops_root = candidate.parent.parent if candidate.parent.name == "layers" else candidate.parent
+                    break
+        else:
+            visual_ops_root = scene.layers_dir.parent if scene.layers_dir is not None else Path(source_path).parent
+        try:
+            with Image.open(source_path) as raw:
+                source_image = apply_visual_ops(
+                    raw.convert("RGBA"),
+                    window.document.instances[instance_id].visual_ops,
+                    base_dir=visual_ops_root,
+                )
+        except (OSError, ValueError, TypeError) as exc:
+            window.statusBar().showMessage(f"Color Match cannot read the selected layer: {exc}", 6000)
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("Color Match")
         form = QFormLayout(dialog)
+        instructions = QLabel(
+            "Pick a visible source color and a visible target color on the canvas. "
+            "The target is sampled from the committed image, even while Preview is shown. "
+            "Coordinate fields below are the precision alternative. Esc cancels the current point pick; "
+            "Cancel closes this dialog without applying."
+        )
+        instructions.setWordWrap(True)
+        instructions.setAccessibleName("Color Match instructions")
+        form.addRow(instructions)
+        pick_status = QLabel("Canvas samples: not picked")
+        pick_status.setWordWrap(True)
+        pick_status.setAccessibleName("Color Match sample status")
+        form.addRow(pick_status)
         source_x = self._spin(0.0, float(max(0, source_image.width - 1)), 1.0, source_image.width / 2.0)
         source_y = self._spin(0.0, float(max(0, source_image.height - 1)), 1.0, source_image.height / 2.0)
         target_x = self._spin(0.0, float(max(0, target_image.width - 1)), 1.0, target_image.width / 2.0)
@@ -456,54 +694,91 @@ class InspectorDock(QDockWidget):
         strength = self._spin(0.0, 1.0, 0.05, 0.75)
         preserve = QCheckBox("Preserve luminance")
         preserve.setChecked(True)
+        def pick(instance, x_spin, y_spin, label, alpha_image=None):
+            dialog.hide()
+            def picked(point):
+                if point is not None:
+                    x_spin.setValue(point[0])
+                    y_spin.setValue(point[1])
+                    pick_status.setText(f"Canvas samples: {label} point set")
+                else:
+                    pick_status.setText(f"Canvas samples: {label} point pick cancelled; values unchanged")
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+            window.canvas.begin_color_pick(instance, picked, source_image=alpha_image)
+            window.statusBar().showMessage(
+                f"Click a visible {label.lower()} point on the canvas. Esc cancels this pick; Cancel closes Color Match.",
+                8000,
+            )
+        pick_box = QWidget()
+        pick_layout = QHBoxLayout(pick_box)
+        pick_layout.setContentsMargins(0, 0, 0, 0)
+        for label, instance, x_spin, y_spin, alpha_image in (
+            ("Pick source on canvas", instance_id, source_x, source_y, source_image),
+            ("Pick target on canvas", None, target_x, target_y, None),
+        ):
+            pick_button = QPushButton(label)
+            pick_button.setAccessibleName(label)
+            pick_label = "source" if instance is not None else "target"
+            pick_button.setToolTip(
+                "Pick a source pixel from the selected layer" if instance is not None
+                else "Pick a target pixel from the committed composite"
+            )
+            pick_button.clicked.connect(
+                lambda checked=False, i=instance, x=x_spin, y=y_spin, name=pick_label, img=alpha_image:
+                pick(i, x, y, name, img)
+            )
+            pick_layout.addWidget(pick_button)
+        form.addRow("Pick colors", pick_box)
+        form.addRow(QLabel("Coordinate fields (precision alternative)"))
         form.addRow("Source X", source_x)
         form.addRow("Source Y", source_y)
         form.addRow("Target X", target_x)
         form.addRow("Target Y", target_y)
         form.addRow("Strength", strength)
         form.addRow("", preserve)
-        def pick(instance, x_spin, y_spin):
-            dialog.hide()
-            def picked(point):
-                if point is not None:
-                    x_spin.setValue(point[0])
-                    y_spin.setValue(point[1])
-                dialog.show()
-                dialog.raise_()
-            window.canvas.begin_color_pick(instance, picked)
-        for label, instance, x_spin, y_spin in (
-            ("Pick source on canvas", instance_id, source_x, source_y),
-            ("Pick target on canvas", None, target_x, target_y),
-        ):
-            pick_button = QPushButton(label)
-            pick_button.setAccessibleName(label)
-            pick_button.clicked.connect(lambda checked=False, i=instance, x=x_spin, y=y_spin: pick(i, x, y))
-            form.addRow(pick_button)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
         preview_button = buttons.addButton("Preview", QDialogButtonBox.ButtonRole.ActionRole)
         def match_params():
-            source_rgb = tuple(source_image.getpixel((round(source_x.value()), round(source_y.value())))[:3])
-            target_rgb = tuple(target_image.getpixel((round(target_x.value()), round(target_y.value())))[:3])
+            source_rgb = sample_patch(source_image, (source_x.value(), source_y.value()))
+            target_rgb = sample_patch(target_image, (target_x.value(), target_y.value()))
             return color_match_params(
                 source_rgb,
                 target_rgb,
                 strength=strength.value(),
                 preserve_luminance=preserve.isChecked(),
             )
-        preview_button.clicked.connect(
-            lambda: window.canvas.scene_model.preview_color_match(instance_id, match_params())
-        )
-        buttons.accepted.connect(dialog.accept)
+
+        def preview_match():
+            try:
+                params = match_params()
+            except ValueError as exc:
+                pick_status.setText(f"Cannot preview: {exc}")
+                return
+            window.canvas.scene_model.preview_color_match(instance_id, params)
+            pick_status.setText("Preview shown from the committed source and target samples")
+
+        def apply_match():
+            try:
+                match_params()
+            except ValueError as exc:
+                pick_status.setText(f"Cannot apply: {exc}")
+                return
+            dialog.accept()
+            self._apply_color_match(
+                window, instance_id, source_image, target_image,
+                (source_x.value(), source_y.value()), (target_x.value(), target_y.value()),
+                strength.value(), preserve.isChecked(),
+            )
+
+        preview_button.clicked.connect(preview_match)
+        buttons.accepted.connect(apply_match)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         dialog.finished.connect(lambda _: window.canvas.cancel_color_pick())
         dialog.finished.connect(lambda _: window.canvas.scene_model.clear_transient_preview())
-        dialog.accepted.connect(lambda: self._apply_color_match(
-            window, instance_id, source_image, target_image,
-            (source_x.value(), source_y.value()), (target_x.value(), target_y.value()),
-            strength.value(), preserve.isChecked(),
-        ))
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.show()
 
@@ -691,6 +966,19 @@ class InspectorDock(QDockWidget):
                 window.run_command(command)
         QTimer.singleShot(0, commit)
 
+    def _defer_multi_command(self, instance_ids: list[str], command) -> None:
+        """Let the emitting editor/button finish its native Qt signal first."""
+        window = self._main_window()
+        document = getattr(window, "document", None)
+        ids = tuple(instance_ids)
+
+        def commit() -> None:
+            current = getattr(window, "document", None)
+            if current is document and all(instance_id in document.instances for instance_id in ids):
+                window.run_command(command)
+
+        QTimer.singleShot(0, commit)
+
     def _commit_transform_field(self, field_name: str, value: float) -> None:
         window = self._main_window()
         instance_id = self._instance_id
@@ -707,10 +995,12 @@ class InspectorDock(QDockWidget):
             document = getattr(window, "document", None)
             if document is None or instance_id not in document.instances:
                 return
-            window.run_command(
+            committed = window.run_command(
                 lambda document, image_sources: set_instance_transform(
                     document, image_sources, instance_id, **{field_name: value}
                 )
             )
+            if not committed:
+                self.refresh(window.selection_model.instance_ids)
 
         QTimer.singleShot(0, commit)

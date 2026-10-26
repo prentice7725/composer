@@ -175,6 +175,15 @@ class DonorAlignController:
         if self._pixmap_item is not None:
             self._pixmap_item.setOpacity(opacity)
 
+    def nudge(self, dx: float, dy: float) -> bool:
+        """Move the transient donor in document pixels without committing."""
+        if not self.active or self.drag is not None:
+            return False
+        self.transform["x"] += float(dx)
+        self.transform["y"] += float(dy)
+        self._redraw()
+        return True
+
     def set_visible(self, visible: bool) -> None:
         if self._pixmap_item is not None:
             self._pixmap_item.setVisible(visible)

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portrait-composer/schemas/portrait-rig-bundle-v0.4.schema.json",
+  "title": "Portrait Composer Rig Bundle v0.4",
+  "type": "object",
+  "required": [
+    "format", "version", "canvas", "layers", "draw_order", "instance_draw_order", "variant_layers",
+    "instances", "assets", "variant_sets", "expressions", "rig_intent", "donors",
+    "source_metadata", "expression_intent"
+  ],
+  "properties": {
+    "format": {"const": "portrait-rig-bundle"},
+    "version": {"const": "0.4"},
+    "assembly_format": {"const": "portrait-assembly"},
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    },
+    "layers": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "draw_order": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "instance_draw_order": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "variant_layers": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^variants/[^/]+\\.png$"}
+    },
+    "instances": {"type": "object"},
+    "assets": {"type": "object"},
+    "variant_sets": {"type": "object"},
+    "expressions": {"type": "object"},
+    "rig_intent": {"type": "object"},
+    "donors": {"type": "object"},
+    "source_metadata": {"type": "object"},
+    "expression_intent": {"$ref": "#/$defs/expressionIntent"}
+  },
+  "$defs": {
+    "expressionIntent": {
+      "type": "object",
+      "required": ["profile", "articulation", "emotion_channels", "presets"],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {"const": "face_expression_core_v2"},
+        "articulation": {"type": "object"},
+        "emotion_channels": {"type": "object"},
+        "presets": {"type": "object"}
+      }
+    }
+  }
+}

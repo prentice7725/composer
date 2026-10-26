@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 from math import isfinite
 from pathlib import Path
+from uuid import uuid4
 
 from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 
@@ -163,6 +164,49 @@ def duplicate_visual_op(document, instance_id: str, op_id: str, new_id: str) -> 
     duplicate = copy.deepcopy(stack[original_index])
     duplicate["id"] = new_id
     return add_visual_op(document, instance_id, duplicate, index=original_index + 1)
+
+
+def copy_visual_ops(
+    document, source_instance_id: str, target_instance_ids, *, mode: str = "append"
+) -> bool:
+    """Copy an ordered VisualOps stack to other instances in one transaction."""
+    if mode not in {"append", "replace"}:
+        raise VisualOpError("VisualOps copy mode must be 'append' or 'replace'")
+    source = _instance(document, str(source_instance_id))
+    validate_stack(copy.deepcopy(source.visual_ops))
+    source_stack = copy.deepcopy(source.visual_ops)
+    target_ids = list(dict.fromkeys(str(value) for value in target_instance_ids))
+    target_ids = [instance_id for instance_id in target_ids if instance_id != source.id]
+    if not target_ids:
+        return False
+
+    candidates = {}
+    for instance_id in target_ids:
+        target = _instance(document, instance_id)
+        if mode == "replace":
+            candidate = copy.deepcopy(source_stack)
+        else:
+            candidate = copy.deepcopy(target.visual_ops)
+            used_ids = {str(op.get("id")) for op in candidate if isinstance(op, dict)}
+            for source_op in source_stack:
+                duplicate = copy.deepcopy(source_op)
+                if duplicate["id"] in used_ids:
+                    original_id = duplicate["id"]
+                    new_id = f"{original_id}_copy_{uuid4().hex[:8]}"
+                    while new_id in used_ids:
+                        new_id = f"{original_id}_copy_{uuid4().hex[:8]}"
+                    duplicate["id"] = new_id
+                used_ids.add(duplicate["id"])
+                candidate.append(duplicate)
+        if candidate != target.visual_ops:
+            candidates[instance_id] = candidate
+
+    if not candidates:
+        return False
+    with document.transaction():
+        for instance_id, candidate in candidates.items():
+            document.instances[instance_id].visual_ops = candidate
+    return True
 
 
 def reset_visual_ops(document, instance_id: str) -> None:

@@ -19,6 +19,7 @@ class UISessionState:
     tree_expansion: set[str] = field(default_factory=set)
     preview_mode: str = "Composite"
     canvas_tool: str = "select"
+    canvas_snap: bool = False
     bake_analyzed: bool = False
     last_render_ms: float = 0.0
     transient_candidate: object | None = None

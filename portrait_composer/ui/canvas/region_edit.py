@@ -158,6 +158,8 @@ class RegionEditController:
     def begin_drag(self, role: tuple, scene_pos) -> bool:
         if self.geometry is None or self._target_box() is None:
             return False
+        if (self.scene.document.instance_authoring or {}).get(self.target_id, {}).get("locked"):
+            return False
         side, handle = role
         self.drag = {
             "side": side,

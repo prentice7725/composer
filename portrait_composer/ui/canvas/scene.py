@@ -5,9 +5,8 @@ from time import perf_counter
 from pathlib import Path
 
 from PIL import Image, ImageChops
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QImage, QPixmap
-from PySide6.QtGui import QPen
+from PySide6.QtCore import QLineF, QRectF, Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene
 
 from ...instances import Transform
@@ -44,8 +43,11 @@ class CanvasScene(QGraphicsScene):
         self._flicker_timer: QTimer | None = None
         self._flicker_frames: tuple[Image.Image, Image.Image] | None = None
         self._flicker_phase = False
+        self._snap_guide_x: float | None = None
+        self._snap_guide_y: float | None = None
         self.last_render_ms = 0.0
         self.preview_state = PreviewState()
+        self.variant_preview_active = False
         self._donor_flicker_timer: QTimer | None = None
         self._donor_flicker_phase = False
         self.gizmo = TransformGizmo(self)
@@ -62,6 +64,7 @@ class CanvasScene(QGraphicsScene):
     ) -> None:
         # Detach the gizmo's handle items before clear() deletes the scene's
         # graphics items out from under them.
+        self.set_snap_guides()
         self.gizmo.detach()
         self.clear_donor_ghost()
         self.region_edit.clear()
@@ -98,8 +101,8 @@ class CanvasScene(QGraphicsScene):
                 continue
             image_w, image_h = self._resolve_image_size(instance_id, width, height)
             self._image_sizes[instance_id] = (image_w, image_h)
-            scaled_w = max(1.0, image_w * inst.transform.scale_x)
-            scaled_h = max(1.0, image_h * inst.transform.scale_y)
+            scaled_w = max(1.0, image_w * abs(inst.transform.scale_x))
+            scaled_h = max(1.0, image_h * abs(inst.transform.scale_y))
             item = self.addRect(
                 QRectF(0, 0, scaled_w, scaled_h),
                 QPen(QColor("#59d4ff"), 1.5),
@@ -113,6 +116,12 @@ class CanvasScene(QGraphicsScene):
             item.setData(INSTANCE_ROLE, instance_id)
             item.setZValue(index)
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            authoring = (document.instance_authoring or {}).get(instance_id, {})
+            display_name = authoring.get("display_name") or instance_id
+            locked = bool(authoring.get("locked"))
+            item.setToolTip(
+                f"{display_name} · {instance_id}" + (" · Locked" if locked else "")
+            )
             self._hit_items[instance_id] = item
         self._refresh_selection(self.selection_model.instance_ids)
 
@@ -152,15 +161,101 @@ class CanvasScene(QGraphicsScene):
     def _refresh_selection(self, selected_ids: list[str]) -> None:
         for instance_id, item in self._hit_items.items():
             active = instance_id in selected_ids
-            item.setPen(QPen(QColor("#ffd166" if active else "#59d4ff"), 2.0 if active else 1.0))
+            locked = bool(
+                (self.document.instance_authoring or {}).get(instance_id, {}).get("locked")
+            ) if self.document is not None else False
+            item.setPen(
+                QPen(
+                    QColor("#ffd166" if active else ("#c792ff" if locked else "#59d4ff")),
+                    2.0 if active else 1.0,
+                    Qt.PenStyle.DashLine if locked else Qt.PenStyle.SolidLine,
+                )
+            )
             item.setSelected(active)
-        if len(selected_ids) == 1 and selected_ids[0] in self._hit_items:
-            self.gizmo.attach(selected_ids[0], self._hit_items[selected_ids[0]])
+        valid_ids = [
+            instance_id for instance_id in selected_ids
+            if self.document is not None and instance_id in self.document.instances
+        ]
+        if len(valid_ids) > 1 or (valid_ids and valid_ids[0] in self._hit_items):
+            self.gizmo.attach_selection(valid_ids)
         else:
             self.gizmo.detach()
 
     def set_context(self, context: str) -> None:
         self.context = context
+
+    def set_snap_guides(self, *, x: float | None = None, y: float | None = None) -> None:
+        if self._snap_guide_x == x and self._snap_guide_y == y:
+            return
+        self._snap_guide_x = x
+        self._snap_guide_y = y
+        self.update()
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        super().drawForeground(painter, rect)
+        if self._snap_guide_x is None and self._snap_guide_y is None:
+            return
+        painter.save()
+        pen = QPen(QColor("#ffd166"), 0.0, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        bounds = rect
+        if self._snap_guide_x is not None:
+            painter.drawLine(QLineF(self._snap_guide_x, bounds.top(), self._snap_guide_x, bounds.bottom()))
+        if self._snap_guide_y is not None:
+            painter.drawLine(QLineF(bounds.left(), self._snap_guide_y, bounds.right(), self._snap_guide_y))
+        painter.restore()
+
+    def preview_transforms(self, transforms: dict[str, Transform]) -> None:
+        """Render transient transform overrides through the canonical compositor."""
+        if self.document is None or self._committed_reference is None:
+            return
+        self.preview_state.begin()
+        overrides = {}
+        for instance_id, transform in transforms.items():
+            if instance_id not in self.document.instances:
+                continue
+            self.preview_state.set_transform(instance_id, transform.to_dict())
+            overrides[instance_id] = transform
+            self._set_proxy_transform(instance_id, transform)
+        sources = {
+            instance_id: self._resolve_image_path(instance_id)
+            for instance_id in self.document.composition.get("draw_order", [])
+        }
+        try:
+            preview = render_subset(
+                self.document,
+                sources,
+                list(self.document.composition.get("draw_order", [])),
+                transform_overrides=overrides,
+            )
+        except (OSError, ValueError):
+            return
+        self._set_preview_pixmap(preview)
+        self.gizmo.reposition()
+
+    def _set_proxy_transform(self, instance_id: str, transform: Transform) -> None:
+        item = self._hit_items.get(instance_id)
+        if item is None:
+            return
+        image_w, image_h = self.image_size(instance_id)
+        width = max(1.0, image_w * abs(transform.scale_x))
+        height = max(1.0, image_h * abs(transform.scale_y))
+        item.setRect(QRectF(0, 0, width, height))
+        item.setTransformOriginPoint(width / 2.0, height / 2.0)
+        item.setPos(transform.x, transform.y)
+        item.setRotation(transform.rotation)
+
+    def clear_transform_preview(self, instance_ids) -> None:
+        """Restore committed pixels and proxy positions after a nudge gesture."""
+        self.preview_state.clear()
+        self.clear_transient_preview()
+        if self.document is not None:
+            for instance_id in instance_ids:
+                instance = self.document.instances.get(instance_id)
+                if instance is not None:
+                    self._set_proxy_transform(instance_id, instance.transform)
+        self.gizmo.reposition()
 
     def preview_color_match(self, instance_id: str, params: dict) -> None:
         """Show a Color VisualOp preview without changing the document."""
@@ -172,9 +267,26 @@ class CanvasScene(QGraphicsScene):
             return
         try:
             with Image.open(path) as raw:
+                ops = list(instance.visual_ops)
+                preview_id = "__color_match_preview__"
+                index = 2
+                while any(op.get("id") == preview_id for op in ops):
+                    preview_id = f"__color_match_preview_{index}__"
+                    index += 1
+                ops.append({"id": preview_id, "type": "color", "params": params})
+                if self.image_sources is not None:
+                    visual_ops_root = None
+                    for source in self.image_sources.values():
+                        if source:
+                            source_path = Path(source)
+                            visual_ops_root = source_path.parent.parent if source_path.parent.name == "layers" else source_path.parent
+                            break
+                else:
+                    visual_ops_root = self.layers_dir.parent if self.layers_dir is not None else path.parent
                 corrected = apply_visual_ops(
                     raw.convert("RGBA"),
-                    [{"id": "preview", "type": "color", "params": params}],
+                    ops,
+                    base_dir=visual_ops_root,
                 )
             positioned, offset = _positioned(corrected, instance.transform)
         except (OSError, ValueError):
@@ -189,11 +301,18 @@ class CanvasScene(QGraphicsScene):
     # it. Every mode renders starting from self._committed_reference, the
     # same pixels the core renderer produced at the last commit -- never a
     # second, separately-drifting compositor.
-    def preview_harvest_candidate(self, target_tag: str, candidate_path: Path, mode: str) -> None:
+    def preview_harvest_candidate(
+        self,
+        target_tag: str,
+        candidate_path: Path,
+        mode: str,
+        *,
+        canonical_instance_id: str | None = None,
+    ) -> None:
         if self._reference_item is None or self._committed_reference is None:
             return
         self._stop_flicker()
-        inst_id = f"{target_tag}__instance"
+        inst_id = canonical_instance_id or f"{target_tag}__instance"
         existing = self.document.instances.get(inst_id) if self.document is not None else None
         transform = existing.transform if existing is not None else Transform()
         try:
@@ -245,12 +364,19 @@ class CanvasScene(QGraphicsScene):
         else:  # composite
             self._set_preview_pixmap(replaced)
 
-    def preview_derived_pair(self, target_tag: str, left_path: Path, right_path: Path) -> None:
+    def preview_derived_pair(
+        self,
+        target_tag: str,
+        left_path: Path,
+        right_path: Path,
+        *,
+        canonical_instance_id: str | None = None,
+    ) -> None:
         """Preview both producer-side geometric derivatives transiently."""
         if self._reference_item is None or self._committed_reference is None:
             return
         self._stop_flicker()
-        instance_id = f"{target_tag}__instance"
+        instance_id = canonical_instance_id or f"{target_tag}__instance"
         existing = self.document.instances.get(instance_id) if self.document is not None else None
         transform = existing.transform if existing is not None else Transform()
         preview = self._committed_reference.copy()
@@ -282,6 +408,7 @@ class CanvasScene(QGraphicsScene):
 
     def clear_transient_preview(self) -> None:
         self._stop_flicker()
+        self.variant_preview_active = False
         if self._committed_reference is not None:
             self._set_preview_pixmap(self._committed_reference)
 
@@ -292,6 +419,7 @@ class CanvasScene(QGraphicsScene):
         if self.document is None or self._committed_reference is None:
             return
         self._stop_flicker()
+        self.variant_preview_active = True
         document = self.document
         canvas = document.composition.get("canvas") or {}
         width = canvas.get("width", self._committed_reference.width)
@@ -313,6 +441,13 @@ class CanvasScene(QGraphicsScene):
                 member_of[member_id] = vs_id
 
         preview = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        visual_ops_root = self.layers_dir.parent if self.image_sources is None and self.layers_dir is not None else None
+        if self.image_sources is not None:
+            for source in self.image_sources.values():
+                if source:
+                    source_path = Path(source)
+                    visual_ops_root = source_path.parent.parent if source_path.parent.name == "layers" else source_path.parent
+                    break
         for instance_id in document.composition.get("draw_order", []):
             inst = document.instances.get(instance_id)
             if inst is None or inst.opacity <= 0:
@@ -325,7 +460,7 @@ class CanvasScene(QGraphicsScene):
             if path is None or not path.exists():
                 continue
             with Image.open(path) as raw:
-                layer = raw.convert("RGBA")
+                layer = apply_visual_ops(raw.convert("RGBA"), inst.visual_ops, base_dir=visual_ops_root)
                 if inst.opacity < 1.0:
                     r, g, b, a = layer.split()
                     a = a.point(lambda v, opacity=inst.opacity: round(v * opacity))
@@ -344,6 +479,7 @@ class CanvasScene(QGraphicsScene):
     def clear_donor_ghost(self) -> None:
         self._stop_donor_flicker()
         self.donor_ghost.clear()
+        self.variant_preview_active = False
         if self._reference_item is not None:
             self._reference_item.setVisible(True)
         if self._committed_reference is not None:

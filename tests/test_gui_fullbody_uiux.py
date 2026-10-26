@@ -7,6 +7,7 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QPushButton
+from PIL import Image
 from portrait_composer.assembly import identity_assembly
 from portrait_composer.bundle import read_portrait_bundle
 from portrait_composer.ui.main_window import MainWindow
@@ -54,6 +55,7 @@ def test_color_preview_cancel_is_transient_and_apply_is_one_undo(fullbody_window
     app, window, instance_id = fullbody_window
     source = window.image_sources[instance_id]
     original_bytes = source.read_bytes()
+    window.canvas.scene_model._committed_reference = Image.new("RGBA", (120, 480), (32, 80, 200, 255))
     revision = window.document.history.revision
     window.inspector_dock._color_match()
     dialog = window.inspector_dock.findChild(QDialog)
@@ -73,7 +75,7 @@ def test_color_preview_cancel_is_transient_and_apply_is_one_undo(fullbody_window
     from PySide6.QtGui import QKeyEvent
     window.canvas.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
     assert window.canvas._color_pick is None
-    dialog.accept()
+    next(button for button in dialog.findChildren(QPushButton) if button.text() == "Apply").click()
     app.processEvents()
     assert window.document.history.revision == revision + 1
     assert len(window.document.instances[instance_id].visual_ops) == 1

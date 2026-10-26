@@ -7,9 +7,10 @@ restores the previous mask without mutating the old file.
 from __future__ import annotations
 
 import copy
+from math import isfinite
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from .visual_ops import VisualOpError, update_visual_op
 
@@ -33,9 +34,10 @@ def edit_mask_stroke(
     points: list[tuple[float, float]],
     radius: float,
     mode: str,
+    strength: float = 1.0,
     work_dir: Path,
     base_dir: Path | None = None,
-) -> Path:
+) -> Path | None:
     """Apply one erase/restore stroke and commit it as one undo step."""
     if mode not in {"erase", "restore"}:
         raise MaskEditError("mask stroke mode must be 'erase' or 'restore'")
@@ -43,6 +45,14 @@ def edit_mask_stroke(
         raise MaskEditError("mask stroke needs at least one point")
     if radius <= 0:
         raise MaskEditError("mask stroke radius must be positive")
+    try:
+        strength_value = float(strength)
+    except (TypeError, ValueError) as exc:
+        raise MaskEditError("mask stroke strength must be between 0 and 1") from exc
+    if not isfinite(strength_value) or not 0.0 <= strength_value <= 1.0:
+        raise MaskEditError("mask stroke strength must be between 0 and 1")
+    if strength_value == 0:
+        return None
 
     instance = document.instances.get(instance_id)
     if instance is None:
@@ -56,14 +66,20 @@ def edit_mask_stroke(
 
     with Image.open(source) as raw:
         mask = raw.convert("L")
-    draw = ImageDraw.Draw(mask)
-    value = 0 if mode == "erase" else 255
+    original = mask.copy()
+    stroke_mask = Image.new("L", mask.size, 0)
+    draw = ImageDraw.Draw(stroke_mask)
     scaled_points = [(round(float(x)), round(float(y))) for x, y in points]
     width = max(1, round(float(radius) * 2))
-    draw.line(scaled_points, fill=value, width=width, joint="curve")
+    draw.line(scaled_points, fill=255, width=width, joint="curve")
     half = width / 2.0
     for x, y in scaled_points:
-        draw.ellipse((round(x - half), round(y - half), round(x + half), round(y + half)), fill=value)
+        draw.ellipse((round(x - half), round(y - half), round(x + half), round(y + half)), fill=255)
+    target = Image.new("L", mask.size, 0 if mode == "erase" else 255)
+    blended = Image.blend(mask, target, strength_value)
+    mask = Image.composite(blended, mask, stroke_mask)
+    if ImageChops.difference(original, mask).getbbox() is None:
+        return None
 
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)

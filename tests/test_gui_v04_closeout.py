@@ -65,7 +65,7 @@ def test_prepare_rig_exposes_three_readiness_checks(window):
     assert window.bake_workbench.workflow_mode.currentData() == "simple"
     assert window.bake_workbench.readiness_labels["torso"].text().startswith("Torso: ")
     assert window.bake_workbench.readiness_labels["expressions"].text().startswith("Expressions: ")
-    assert window.bake_workbench.readiness_labels["autorig"].text().startswith("AutoRig Preflight: ")
+    assert window.bake_workbench.readiness_labels["autorig"].text().startswith("Composer Export Preflight: ")
 
 
 def test_blink_and_talk_tests_are_transient(window):
@@ -79,7 +79,9 @@ def test_blink_and_talk_tests_are_transient(window):
     revision = window.document.history.revision
     window.donor_workbench._preview_articulation("blink")
     assert window.document.history.revision == revision
-    assert "Blink Test preview is transient" in window.statusBar().currentMessage()
+    assert window.statusBar().currentMessage().startswith("Previewing eyes closed")
+    assert "does not simulate blink or lip-sync" in window.statusBar().currentMessage()
     window.donor_workbench._preview_articulation("talk")
     assert window.document.history.revision == revision
-    assert "Talk Test preview is transient" in window.statusBar().currentMessage()
+    assert window.statusBar().currentMessage().startswith("Previewing mouth a")
+    assert "does not simulate blink or lip-sync" in window.statusBar().currentMessage()

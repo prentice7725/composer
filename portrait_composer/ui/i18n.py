@@ -121,7 +121,15 @@ _KO = {
     "Redo": "다시 실행",
     "Fit Canvas": "캔버스 맞춤",
     "Fit Selection": "선택 영역 맞춤",
+    "Snap to Canvas and Layers": "캔버스·레이어에 스냅",
     "Focus Tree Search": "트리 검색으로 이동",
+    "VisualOps batch copy": "VisualOps 일괄 복제",
+    "Append Stack": "스택 추가",
+    "Replace Stacks": "스택 교체",
+    (
+        "Unlock layers before editing them together. A locked VisualOps source can still be copied "
+        "to unlocked targets."
+    ): "여러 레이어를 편집하려면 대상 레이어의 잠금을 해제하세요. 잠긴 레이어도 VisualOps 원본으로 사용할 수 있습니다.",
     "Harvest": "수확",
     "Donor Align": "Donor 정렬",
     "Rig Intent": "Rig Intent",

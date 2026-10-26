@@ -545,14 +545,16 @@ class BakeWorkbench(QWidget):
         self.main_window = main_window
         self._cards: list[_CandidateCard] = []
         self._manual_candidate: BakeCandidate | None = None
-        self._workflow_mode = "advanced"
+        self._workflow_mode = "simple"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("Profile"))
+        self.profile_label = QLabel("Profile")
+        top.addWidget(self.profile_label)
         self.profile_group = QButtonGroup(self)
+        self.profile_buttons = []
         for profile in PROFILES:
             button = QRadioButton(profile)
             button.setProperty("profile", profile)
@@ -561,12 +563,13 @@ class BakeWorkbench(QWidget):
                 button.setChecked(True)
             button.toggled.connect(self._profile_changed)
             self.profile_group.addButton(button)
+            self.profile_buttons.append(button)
             top.addWidget(button)
         top.addStretch(1)
-        zoom_button = QPushButton("100% Zoom")
-        zoom_button.setAccessibleName("Bake preview 100 percent zoom")
-        zoom_button.clicked.connect(self._zoom_100)
-        top.addWidget(zoom_button)
+        self.zoom_button = QPushButton("100% Zoom")
+        self.zoom_button.setAccessibleName("Bake preview 100 percent zoom")
+        self.zoom_button.clicked.connect(self._zoom_100)
+        top.addWidget(self.zoom_button)
         self.bake_selected_button = QPushButton("Bake Selected")
         self.bake_selected_button.setAccessibleName("Analyze selected layers for bake")
         self.bake_selected_button.setToolTip("Analyze the currently selected Tree layers as one bake candidate")
@@ -577,6 +580,13 @@ class BakeWorkbench(QWidget):
         self.advanced_button.setAccessibleName("Show advanced bake options")
         self.advanced_button.clicked.connect(self._toggle_advanced)
         top.addWidget(self.advanced_button)
+        self.export_rig_button = QPushButton("Export Rig Bundle…")
+        self.export_rig_button.setAccessibleName("Export rig bundle from prepare rig")
+        self.export_rig_button.setToolTip(
+            "Run Composer export checks, review the visible canonical layers, and export to AutoRig"
+        )
+        self.export_rig_button.clicked.connect(self.main_window.export_rig_bundle_dialog)
+        top.addWidget(self.export_rig_button)
         outer.addLayout(top)
 
         workflow_panel = QWidget()
@@ -585,7 +595,7 @@ class BakeWorkbench(QWidget):
         self.workflow_mode = QComboBox()
         self.workflow_mode.addItem("Simple", "simple")
         self.workflow_mode.addItem("Advanced", "advanced")
-        self.workflow_mode.setCurrentIndex(self.workflow_mode.findData("advanced"))
+        self.workflow_mode.setCurrentIndex(self.workflow_mode.findData("simple"))
         self.workflow_mode.setAccessibleName("Bake workflow mode")
         self.workflow_mode.currentIndexChanged.connect(self._workflow_mode_changed)
         workflow_row.addWidget(self.workflow_mode)
@@ -595,42 +605,56 @@ class BakeWorkbench(QWidget):
 
         self.simple_board = QFrame()
         self.simple_board.setFrameShape(QFrame.Shape.StyledPanel)
-        simple_layout = QHBoxLayout(self.simple_board)
+        simple_layout = QVBoxLayout(self.simple_board)
+        simple_intro = QLabel(
+            "Review the Assembly and export visible canonical layers. Separate parts can go directly to AutoRig."
+        )
+        simple_intro.setWordWrap(True)
+        simple_layout.addWidget(simple_intro)
+        outer.addWidget(self.simple_board)
+
+        self.compatibility_box = QFrame()
+        self.compatibility_box.setFrameShape(QFrame.Shape.StyledPanel)
+        compatibility_layout = QVBoxLayout(self.compatibility_box)
+        compatibility_layout.addWidget(QLabel("Legacy Merge Compatibility"))
         compatibility_note = QLabel(
-            "Compatibility fallback. Prefer producer left/right derivatives when available."
+            "Merging removes independent layer control. Use this only when a downstream workflow needs one combined layer."
         )
         compatibility_note.setWordWrap(True)
         compatibility_note.setToolTip(
-            "This merge removes independent layer control; use producer left/right derivatives first."
+            "This compatibility operation is optional. It never runs automatically."
         )
-        simple_layout.addWidget(compatibility_note)
-        simple_layout.addWidget(QLabel("Sources"))
+        compatibility_layout.addWidget(compatibility_note)
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel("Sources"))
         self.simple_sources_label = QLabel("Select at least two layers")
         self.simple_sources_label.setMinimumWidth(220)
-        simple_layout.addWidget(self.simple_sources_label)
-        simple_layout.addWidget(QLabel("Result"))
+        source_row.addWidget(self.simple_sources_label)
+        source_row.addWidget(QLabel("Result"))
         self.simple_result_combo = QComboBox()
         self.simple_result_combo.setEditable(True)
         self.simple_result_combo.addItem("Choose result semantic…", "")
         for semantic in ("topwear_with_arms", "body_with_sleeves", "coat_full"):
             self.simple_result_combo.addItem(semantic, semantic)
         self.simple_result_combo.setAccessibleName("Quick bake result semantic")
-        simple_layout.addWidget(self.simple_result_combo)
-        simple_layout.addWidget(QLabel("Seam Cleanup"))
+        source_row.addWidget(self.simple_result_combo)
+        source_row.addWidget(QLabel("Seam Cleanup"))
         self.simple_cleanup_combo = QComboBox()
         self.simple_cleanup_combo.addItem("Auto", "auto")
         self.simple_cleanup_combo.addItem("Strong", "aggressive")
         self.simple_cleanup_combo.addItem("Off", "off")
         self.simple_cleanup_combo.setAccessibleName("Quick bake seam cleanup")
-        simple_layout.addWidget(self.simple_cleanup_combo)
+        source_row.addWidget(self.simple_cleanup_combo)
+        compatibility_layout.addLayout(source_row)
+        compatibility_actions = QHBoxLayout()
         self.simple_before_button = QPushButton("Before")
         self.simple_before_button.setAccessibleName("Quick bake before preview")
         self.simple_after_button = QPushButton("After")
         self.simple_after_button.setAccessibleName("Quick bake after preview")
         self.simple_before_button.clicked.connect(lambda: self._quick_preview("before"))
         self.simple_after_button.clicked.connect(lambda: self._quick_preview("after"))
-        simple_layout.addWidget(self.simple_before_button)
-        simple_layout.addWidget(self.simple_after_button)
+        compatibility_actions.addWidget(self.simple_before_button)
+        compatibility_actions.addWidget(self.simple_after_button)
         self.quick_bake_button = QPushButton("Legacy Torso Merge")
         self.quick_bake_button.setAccessibleName("Legacy torso merge compatibility action")
         self.quick_bake_button.setToolTip(
@@ -638,26 +662,29 @@ class BakeWorkbench(QWidget):
             "Prefer producer left/right derivatives when available."
         )
         self.quick_bake_button.clicked.connect(self._quick_bake)
-        simple_layout.addWidget(self.quick_bake_button)
-        self.export_rig_button = QPushButton("Export Rig Bundle…")
-        self.export_rig_button.setAccessibleName("Export rig bundle from prepare rig")
-        self.export_rig_button.setToolTip("Review readiness and export the visible canonical layers to AutoRig")
-        self.export_rig_button.clicked.connect(self.main_window.export_rig_bundle_dialog)
-        simple_layout.addWidget(self.export_rig_button)
-        outer.addWidget(self.simple_board)
+        compatibility_actions.addWidget(self.quick_bake_button)
+        compatibility_layout.addLayout(compatibility_actions)
+        self.compatibility_box.setVisible(False)
+        outer.addWidget(self.compatibility_box)
 
         self.readiness_box = QFrame()
         self.readiness_box.setFrameShape(QFrame.Shape.StyledPanel)
         readiness_layout = QHBoxLayout(self.readiness_box)
-        readiness_layout.addWidget(QLabel("Readiness"))
+        readiness_layout.addWidget(QLabel("Preparation"))
         self.readiness_labels = {}
-        for key, title in (("torso", "Torso"), ("expressions", "Expressions"), ("autorig", "AutoRig Preflight")):
+        for key, title in (("torso", "Torso"), ("expressions", "Expressions"), ("autorig", "Composer Export Preflight")):
             label = QLabel(f"{title}: NEEDS REVIEW")
             label.setAccessibleName(f"Prepare Rig {key} readiness")
             self.readiness_labels[key] = label
             readiness_layout.addWidget(label)
         readiness_layout.addStretch(1)
         outer.addWidget(self.readiness_box)
+        self.readiness_detail = QLabel(
+            "Composer checks describe export readiness; they do not verify AutoRig runtime behavior."
+        )
+        self.readiness_detail.setWordWrap(True)
+        self.readiness_detail.setAccessibleName("Prepare Rig readiness details")
+        outer.addWidget(self.readiness_detail)
 
         self.plan_box = QFrame()
         self.plan_box.setFrameShape(QFrame.Shape.StyledPanel)
@@ -758,7 +785,7 @@ class BakeWorkbench(QWidget):
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self.cards_body, 1)
         self.main_window.selection_model.subscribe(lambda _ids: self._selection_changed())
-        self._set_workflow_mode("advanced")
+        self._set_workflow_mode("simple")
         self._selection_changed()
 
     def _current_profile(self) -> str:
@@ -803,12 +830,19 @@ class BakeWorkbench(QWidget):
         simple = mode == "simple"
         self.workflow_panel.setVisible(not simple)
         self.advanced_button.setChecked(not simple)
+        self.profile_label.setVisible(not simple)
+        for button in self.profile_buttons:
+            button.setVisible(not simple)
+        self.zoom_button.setVisible(not simple)
         self.bake_selected_button.setVisible(not simple)
         self.simple_board.setVisible(simple)
         self.readiness_box.setVisible(simple)
+        self.readiness_detail.setVisible(simple)
+        self.compatibility_box.setVisible(not simple)
         self.plan_box.setVisible(not simple)
         self.plan_options_widget.setVisible(not simple)
         self.plan_row_widget.setVisible(not simple)
+        self.status_label.setVisible(not simple)
         # Candidate cards remain constructed in Simple mode for backwards
         # compatible API/tests, but the user sees the compact quick workflow.
         self.cards_body.setVisible(not simple)
@@ -862,6 +896,15 @@ class BakeWorkbench(QWidget):
 
     def _update_readiness(self, document, *, torso_sources: list[str] | None = None) -> None:
         if document is None:
+            for key, label in self.readiness_labels.items():
+                title = {
+                    "torso": "Torso",
+                    "expressions": "Expressions",
+                    "autorig": "Composer Export Preflight",
+                }[key]
+                label.setText(f"{title}: NO ASSEMBLY")
+                label.setStyleSheet("color: #aab2bf; font-weight: 600;")
+            self.readiness_detail.setText("Open or import an Assembly to review export readiness.")
             return
         torso_sources = torso_sources if torso_sources is not None else _auto_torso_sources(document)
         baked_torso = any(
@@ -871,7 +914,7 @@ class BakeWorkbench(QWidget):
             plan.get("status") == "BAKED" and plan.get("result_semantic") == "topwear_with_arms"
             for plan in document.bake_plans.values()
         )
-        torso_status = "READY" if baked_torso else "NEEDS REVIEW" if torso_sources else "BLOCKED"
+        torso_status = "READY" if baked_torso else "OPTIONAL" if torso_sources else "NOT REQUIRED"
         slots = document.donor_slots or {}
         eyes = slots.get("eyes", {})
         mouth = slots.get("mouth", {})
@@ -883,13 +926,29 @@ class BakeWorkbench(QWidget):
                 "Rig preflight BLOCK: " + " | ".join(map(str, errors)),
                 context="BAKE",
             )
-        autorig_status = "BLOCKED" if errors else "READY"
+        autorig_status = "BLOCKED" if errors else "CAN EXPORT"
         values = {"torso": torso_status, "expressions": expression_status, "autorig": autorig_status}
         for key, label in self.readiness_labels.items():
-            title = {"torso": "Torso", "expressions": "Expressions", "autorig": "AutoRig Preflight"}[key]
+            title = {
+                "torso": "Torso",
+                "expressions": "Expressions",
+                "autorig": "Composer Export Preflight",
+            }[key]
             label.setText(f"{title}: {values[key]}")
-            color = {"READY": "#7fffa0", "NEEDS REVIEW": "#ffd166", "BLOCKED": "#ff7b7b"}[values[key]]
+            color = {
+                "READY": "#7fffa0",
+                "CAN EXPORT": "#7fffa0",
+                "OPTIONAL": "#ffd166",
+                "NOT REQUIRED": "#aab2bf",
+                "NEEDS REVIEW": "#ffd166",
+                "BLOCKED": "#ff7b7b",
+            }[values[key]]
             label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self.readiness_detail.setText(
+            "Composer export checks passed. AutoRig runtime acceptance has not been verified."
+            if not errors
+            else "Export is blocked. Fix these Assembly issues, then review again:\n• " + "\n• ".join(map(str, errors))
+        )
 
     def _refresh_plan_list(self) -> None:
         document = self.main_window.document

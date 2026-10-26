@@ -13,14 +13,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 from ...donors import check_drift, expression_donor_kind, expression_target_instance
 from ...donor_slots import EYE_SLOTS, MOUTH_SLOTS, donor_slot_status
 from ..commands import assign_donor_slot
+from .thumbnail_cache import instance_thumbnail
 
 MODES = ("composite", "target_only", "donor_only", "flicker", "difference")
 
@@ -98,6 +100,7 @@ class DonorWorkbench(QWidget):
         self._donor_image: Image.Image | None = None
         self._pending_slot: tuple[str, str] | None = None
         self._slot_status_labels: dict[tuple[str, str], QLabel] = {}
+        self._slot_preview_buttons: dict[tuple[str, str], QToolButton] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -113,46 +116,85 @@ class DonorWorkbench(QWidget):
         self.advanced_button.clicked.connect(self._toggle_advanced)
         top.addWidget(self.advanced_button)
         self.target_label = QLabel("Target: none selected")
+        self.target_label.setToolTip(
+            "While a donor preview is active, drag it to move or use Arrow / Shift+Arrow to nudge by 1 / 10 document pixels."
+        )
         top.addWidget(self.target_label, 1)
         outer.addLayout(top)
+        self.alignment_help = QLabel(
+            "Donor alignment: drag to move · Arrow 1 document px · Shift+Arrow 10 px · Import applies the placement"
+        )
+        self.alignment_help.setWordWrap(True)
+        self.alignment_help.setAccessibleName("Donor alignment keyboard help")
+        outer.addWidget(self.alignment_help)
 
-        slot_box = QGroupBox("Face Expression Core · face_expression_core_v1")
-        slot_layout = QGridLayout(slot_box)
-        slot_layout.addWidget(QLabel("Family"), 0, 0)
-        slot_layout.addWidget(QLabel("Slot"), 0, 1)
-        slot_layout.addWidget(QLabel("Status"), 0, 2)
-        slot_layout.addWidget(QLabel("Author"), 0, 3)
-        row = 1
+        slot_box = QGroupBox("Face Expression Materials · face_expression_core_v1")
+        slot_layout = QHBoxLayout(slot_box)
+        slot_layout.setContentsMargins(6, 6, 6, 6)
+        slot_layout.setSpacing(6)
         for family, slots in (("eyes", EYE_SLOTS), ("mouth", MOUTH_SLOTS)):
             for slot in slots:
-                slot_layout.addWidget(QLabel(family.title()), row, 0)
-                slot_layout.addWidget(QLabel(slot), row, 1)
-                status = QLabel("EMPTY")
+                card = QGroupBox(f"{family.title()} · {slot}")
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(4, 4, 4, 4)
+                card_layout.setSpacing(3)
+                preview_button = QToolButton()
+                preview_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+                preview_button.setIconSize(QSize(42, 42))
+                preview_button.setFixedSize(92, 68)
+                preview_button.setText("Preview")
+                preview_button.setAccessibleName(f"Preview {family} {slot} material")
+                preview_button.setToolTip("Show this assigned material in the canvas without changing the document")
+                preview_button.clicked.connect(
+                    lambda _checked=False, f=family, s=slot: self._preview_donor_slot(f, s)
+                )
+                card_layout.addWidget(preview_button, 0, Qt.AlignmentFlag.AlignHCenter)
+                status = QLabel("No material")
                 status.setAccessibleName(f"{family} {slot} donor slot status")
+                status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                status.setWordWrap(True)
                 self._slot_status_labels[(family, slot)] = status
-                slot_layout.addWidget(status, row, 2)
-                select_button = QPushButton("Use Selected")
+                self._slot_preview_buttons[(family, slot)] = preview_button
+                card_layout.addWidget(status)
+                actions = QHBoxLayout()
+                select_button = QPushButton("Use")
                 select_button.setAccessibleName(f"Assign selected instance to {family} {slot} donor slot")
+                select_button.setToolTip("Assign the selected layer as this material")
                 select_button.clicked.connect(lambda _checked=False, f=family, s=slot: self._assign_selected_slot(f, s))
-                slot_layout.addWidget(select_button, row, 3)
-                import_button = QPushButton("Import…")
+                actions.addWidget(select_button)
+                import_button = QPushButton("Import")
                 import_button.setAccessibleName(f"Import donor for {family} {slot} donor slot")
                 import_button.clicked.connect(lambda _checked=False, f=family, s=slot: self._import_for_slot(f, s))
-                slot_layout.addWidget(import_button, row, 4)
-                row += 1
+                actions.addWidget(import_button)
+                card_layout.addLayout(actions)
+                slot_layout.addWidget(card)
+        slot_layout.addStretch(1)
         self.expression_preview_button = QPushButton("Preview Expression Set")
-        self.expression_preview_button.setAccessibleName("Preview face expression set")
+        self.expression_preview_button.setText("Preview Assigned Set")
+        self.expression_preview_button.setAccessibleName("Preview assigned face expression materials")
+        self.expression_preview_button.setToolTip(
+            "Show one static eye state and one static mouth state; this does not simulate blink or lip-sync"
+        )
         self.expression_preview_button.clicked.connect(self._preview_expression_set)
-        slot_layout.addWidget(self.expression_preview_button, row, 3, 1, 2)
         self.blink_test_button = QPushButton("Blink Test")
         self.blink_test_button.setAccessibleName("Preview blink test")
+        self.blink_test_button.setToolTip("Preview the assigned closed-eye state as one static image")
         self.blink_test_button.clicked.connect(lambda: self._preview_articulation("blink"))
-        slot_layout.addWidget(self.blink_test_button, row + 1, 3)
         self.talk_test_button = QPushButton("Talk Test")
         self.talk_test_button.setAccessibleName("Preview talk test")
+        self.talk_test_button.setToolTip("Preview one assigned mouth shape as one static image")
         self.talk_test_button.clicked.connect(lambda: self._preview_articulation("talk"))
-        slot_layout.addWidget(self.talk_test_button, row + 1, 4)
         outer.addWidget(slot_box)
+
+        expression_actions = QHBoxLayout()
+        expression_actions.addWidget(self.expression_preview_button)
+        expression_actions.addWidget(self.blink_test_button)
+        expression_actions.addWidget(self.talk_test_button)
+        expression_actions.addStretch(1)
+        outer.addLayout(expression_actions)
+        self._escape_preview = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._escape_preview.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._escape_preview.activated.connect(self._cancel_slot_preview)
 
         form_panel = QWidget()
         form = QFormLayout(form_panel)
@@ -265,7 +307,122 @@ class DonorWorkbench(QWidget):
             self._semantic_changed(self.semantic_field.text())
         document = self.main_window.document
         for key, label in self._slot_status_labels.items():
-            label.setText(donor_slot_status(document, *key) if document is not None else "EMPTY")
+            self._refresh_slot_card(document, *key)
+
+    def _refresh_slot_card(self, document, family: str, slot: str) -> None:
+        key = (family, slot)
+        label = self._slot_status_labels[key]
+        button = self._slot_preview_buttons[key]
+        entry = (document.donor_slots or {}).get(family, {}).get(slot) if document is not None else None
+        status = donor_slot_status(document, family, slot) if document is not None else "EMPTY"
+        source_id = entry.get("source_instance") if isinstance(entry, dict) else None
+        revision = entry.get("source_revision") if isinstance(entry, dict) else None
+        pixmap = instance_thumbnail(self.main_window, source_id, size=48, source_revision=revision) if source_id else None
+        if pixmap is not None and not pixmap.isNull():
+            button.setIcon(QIcon(pixmap))
+            button.setText("Preview")
+        else:
+            button.setIcon(QIcon())
+            button.setText("Empty" if not entry else "No image")
+
+        messages = {
+            "EMPTY": ("No material", "#8991a3"),
+            "SELECTED": ("Selected", "#59d4ff"),
+            "READY": ("Assigned", "#7bd88f"),
+            "REVIEW": ("Source missing", "#ff8585"),
+            "WARNING": ("Needs review", "#ffd166"),
+        }
+        text, color = messages.get(status, ("Needs review", "#ffd166"))
+        if source_id and (pixmap is None or pixmap.isNull()) and status not in {"EMPTY", "REVIEW"}:
+            text, color = ("Image unavailable", "#ff8585")
+        if status not in {"EMPTY", "REVIEW", "WARNING"} and source_id and text != "Image unavailable":
+            if self._slot_variant_set(document, family, source_id) is None:
+                text = "Assigned · no state set"
+                color = "#ffd166"
+        warnings = entry.get("warnings", []) if isinstance(entry, dict) else []
+        if warnings:
+            text = "Needs review"
+            color = "#ffd166"
+            button.setToolTip("Preview assigned material · " + "; ".join(str(value) for value in warnings))
+        elif text == "Image unavailable":
+            button.setToolTip("The assigned source image or one of its visual corrections is unavailable")
+        else:
+            button.setToolTip(f"Preview assigned {family} {slot} material without changing the document")
+        label.setText(text)
+        label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    @staticmethod
+    def _slot_variant_set(document, family: str, source_id: str) -> str | None:
+        preferred = ("eyes_state", "eye_state") if family == "eyes" else ("mouth_state", "mouth_viseme")
+        for variant_set_id in preferred:
+            variant_set = document.variant_sets.get(variant_set_id)
+            if variant_set is not None and source_id in variant_set.get("members", []):
+                return variant_set_id
+        return next(
+            (
+                variant_set_id
+                for variant_set_id, variant_set in document.variant_sets.items()
+                if source_id in variant_set.get("members", [])
+            ),
+            None,
+        )
+
+    def _preview_donor_slot(self, family: str, slot: str) -> None:
+        document = self.main_window.document
+        entry = (document.donor_slots or {}).get(family, {}).get(slot) if document is not None else None
+        source_id = entry.get("source_instance") if isinstance(entry, dict) else None
+        self._preview_slot_assignments({family: (slot,)}, kind=f"{family} {slot}", source_ids={family: source_id})
+
+    def _preview_slot_assignments(self, states_by_family, *, kind: str, source_ids=None) -> bool:
+        document = self.main_window.document
+        if document is None:
+            return False
+        if self.main_window.canvas.scene_model.donor_ghost.active:
+            self.main_window.statusBar().showMessage(
+                "Clear the pending donor ghost before previewing assigned materials.", 5000
+            )
+            return False
+        source_ids = source_ids or {}
+        overrides = {}
+        shown_states = []
+        issues = []
+        for family, states in states_by_family.items():
+            entries = (document.donor_slots or {}).get(family, {})
+            for slot in states:
+                entry = entries.get(slot)
+                if not isinstance(entry, dict):
+                    continue
+                source_id = source_ids.get(family) if len(states) == 1 else entry.get("source_instance")
+                source_id = source_id or entry.get("source_instance")
+                if source_id not in document.instances:
+                    issues.append(f"{family} {slot}: source is missing")
+                    continue
+                image_path = self.main_window.canvas.scene_model._resolve_image_path(source_id)
+                if image_path is None or not image_path.is_file():
+                    issues.append(f"{family} {slot}: source image is unavailable")
+                    continue
+                thumbnail = instance_thumbnail(self.main_window, source_id, size=8)
+                if thumbnail.isNull():
+                    issues.append(f"{family} {slot}: source image or visual correction is unreadable")
+                    continue
+                variant_set_id = self._slot_variant_set(document, family, source_id)
+                if variant_set_id is None:
+                    issues.append(f"{family} {slot}: add the material to a face-state Variant Set")
+                    continue
+                overrides[variant_set_id] = source_id
+                shown_states.append(f"{family} {slot}")
+                break
+        if not overrides:
+            detail = "; ".join(issues) if issues else "assign a material first"
+            self.main_window.statusBar().showMessage(f"Cannot preview {kind}: {detail}.", 6000)
+            return False
+        self.main_window.canvas.scene_model.preview_variant_selection(overrides)
+        suffix = " · static preview; this does not simulate blink or lip-sync"
+        details = ", ".join(shown_states)
+        if issues:
+            details += " · " + "; ".join(issues)
+        self.main_window.statusBar().showMessage(f"Previewing {details}{suffix}.", 6000)
+        return True
 
     def _assign_selected_slot(self, family: str, slot: str) -> None:
         selected = list(self.main_window.selection_model.instance_ids)
@@ -290,15 +447,16 @@ class DonorWorkbench(QWidget):
         document = self.main_window.document
         if document is None:
             return
-        assigned = sum(
-            bool(document.donor_slots.get(family, {}).get(slot))
-            for family, slots in (("eyes", EYE_SLOTS), ("mouth", MOUTH_SLOTS))
-            for slot in slots
+        self._preview_slot_assignments(
+            {"eyes": ("open", "closed"), "mouth": ("closed", "a", "i", "u", "e", "o")},
+            kind="assigned expression set",
         )
-        self.main_window.statusBar().showMessage(
-            f"Expression set preview: {assigned} face-expression slot(s) assigned. Runtime binding remains AutoRig-owned.",
-            6000,
-        )
+
+    def _cancel_slot_preview(self) -> None:
+        scene = self.main_window.canvas.scene_model
+        if getattr(scene, "variant_preview_active", False):
+            scene.clear_transient_preview()
+            self.main_window.statusBar().showMessage("Expression preview cancelled.", 3000)
 
     def _preview_articulation(self, kind: str) -> None:
         """Preview a closed-eye or speaking-mouth state without committing."""
@@ -308,26 +466,7 @@ class DonorWorkbench(QWidget):
         family, states = (
             ("eyes", ("closed",)) if kind == "blink" else ("mouth", ("a", "i", "u", "e", "o"))
         )
-        entries = document.donor_slots.get(family, {})
-        chosen = next(
-            (entries.get(state, {}).get("source_instance") for state in states if isinstance(entries.get(state), dict)),
-            None,
-        )
-        if chosen is None:
-            self.main_window.statusBar().showMessage(f"Assign a {kind} donor before running the test.", 5000)
-            return
-        preferred = "eyes_state" if family == "eyes" else "mouth_state"
-        variant_set_id = preferred if preferred in document.variant_sets else next(
-            (vs_id for vs_id, vs in document.variant_sets.items() if chosen in vs.get("members", [])),
-            None,
-        )
-        if variant_set_id is None:
-            self.main_window.statusBar().showMessage(f"No {family} VariantSet is available for the test.", 5000)
-            return
-        self.main_window.canvas.scene_model.preview_variant_selection({variant_set_id: chosen})
-        self.main_window.statusBar().showMessage(
-            f"{kind.title()} Test preview is transient; document state was not changed.", 5000
-        )
+        self._preview_slot_assignments({family: states}, kind=f"static {kind} state")
 
     # -- import / clear ---------------------------------------------------
     def _pick_donor(self) -> None:
@@ -370,6 +509,11 @@ class DonorWorkbench(QWidget):
             opacity=opacity,
             target_roi=info["roi"] if info else None,
             target_rotation=info["rotation"] if info else 0.0,
+        )
+        self.main_window.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.main_window.statusBar().showMessage(
+            "Align donor: drag on the canvas or use Arrow / Shift+Arrow to move by 1 / 10 document pixels. Import applies placement.",
+            8000,
         )
         self._set_controls_enabled(True)
         self._metrics_timer.start()

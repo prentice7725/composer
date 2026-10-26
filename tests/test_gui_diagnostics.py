@@ -52,9 +52,9 @@ def test_diagnostics_badge_provenance_and_checklist(qapp, portrait_bundle: Path)
     assert window.diagnostics_dock.checklist.count() == 6
     assert window.diagnostics_dock.list.count() >= 1
     badge_item = next(
-        window.tree_dock.model.item(row)
+        window.tree_dock.model.item(row, 2)
         for row in range(window.tree_dock.model.rowCount())
-        if window.tree_dock.model.item(row).data(INSTANCE_ROLE) == instance_id
+        if window.tree_dock.model.item(row, 1).data(INSTANCE_ROLE) == instance_id
     )
     assert "[WARN:" in badge_item.text()
 

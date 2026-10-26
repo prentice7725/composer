@@ -33,10 +33,10 @@ from ..bundle import (
 from ..document import AssemblyDocument
 from ..render import render_reference
 from ..rig_bundle import export_rig_bundle
-from ..external_edit import apply_ora_reimport, export_ora, inspect_ora
-from ..remap import apply_remap_resolution, classify_remap
+from ..external_edit import export_ora, inspect_ora
+from ..remap import classify_remap
 from .canvas.view import CanvasView
-from .commands import harvest_semantic, nudge_draw_order
+from .commands import apply_ora_reimport, apply_remap_resolution, harvest_semantic, move_draw_order_selection
 from .diagnostics import Diagnostic, collect_diagnostics
 from .docks.diagnostics_dock import DiagnosticsDock
 from .docks.inspector_dock import InspectorDock
@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
     def __init__(self, parent=None, *, settings=None):
         super().__init__(parent)
         self.setWindowTitle("Portrait Composer")
-        self.resize(1440, 900)
+        self.resize(*self._default_window_size())
         self.session = UISessionState()
         self.settings = settings or QSettings(self.SETTINGS_ORGANIZATION, self.SETTINGS_APPLICATION)
         self.locale = str(self.settings.value("locale", "en"))
@@ -315,6 +315,20 @@ class MainWindow(QMainWindow):
         delete_selected.setToolTip("Delete selected layers; undo is available")
         delete_selected.triggered.connect(self._delete_selected_layers)
         edit_menu.addAction(delete_selected)
+        align_menu = edit_menu.addMenu("Align Selection to Canvas")
+        align_menu.setToolTip("Align the selected layers' visible axis-aligned bounds to document bounds")
+        for anchor, label in (
+            ("top_left", "Top Left"), ("top", "Top"), ("top_right", "Top Right"),
+            ("left", "Left"), ("center", "Center"), ("right", "Right"),
+            ("bottom_left", "Bottom Left"), ("bottom", "Bottom"), ("bottom_right", "Bottom Right"),
+        ):
+            action = align_menu.addAction(label)
+            action.setToolTip(
+                "Align the selection's visible axis-aligned bounds to document bounds; linked members move together"
+            )
+            action.triggered.connect(
+                lambda _checked=False, value=anchor: self._align_selection_to_canvas(value)
+            )
 
         view_menu = self.menuBar().addMenu("View")
         fit = QAction("Fit Canvas", self)
@@ -325,9 +339,23 @@ class MainWindow(QMainWindow):
         fit_selection.triggered.connect(self.canvas.fit_selection)
         view_menu.addAction(fit)
         view_menu.addAction(fit_selection)
+        snap_action = QAction("Snap to Canvas and Layers", self)
+        snap_action.setCheckable(True)
+        snap_action.setChecked(self.session.canvas_snap)
+        snap_action.setToolTip(
+            "When moving, align selection edges or centers to the canvas and other visible layers"
+        )
+        snap_action.toggled.connect(self._set_canvas_snap)
+        view_menu.addAction(snap_action)
+        self.canvas_snap_action = snap_action
         self.production_toolbar.addSeparator()
         self.production_toolbar.addAction(fit)
         self.production_toolbar.addAction(fit_selection)
+        view_menu.addSeparator()
+        reset_layout = QAction("Reset Window Layout", self)
+        reset_layout.setToolTip("Restore the default window size and dock arrangement")
+        reset_layout.triggered.connect(self._reset_window_layout)
+        view_menu.addAction(reset_layout)
         view_menu.addSeparator()
         search_action = QAction("Focus Tree Search", self)
         search_action.setShortcut(QKeySequence("Ctrl+F"))
@@ -354,7 +382,7 @@ class MainWindow(QMainWindow):
         advanced_menu = view_menu.addMenu("Advanced Workbenches")
         context_shortcuts = (
             ("Harvest", "H", "HARVEST"),
-            ("Variants", "V", "VARIANTS"),
+            ("Variants", "Ctrl+Shift+V", "VARIANTS"),
             ("Donor Align", "D", "DONOR"),
             ("Rig Intent", "I", "RIG INTENT"),
             ("Bake", "B", "BAKE"),
@@ -364,6 +392,11 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(lambda checked=False, c=context: self.set_context(c))
             advanced_menu.addAction(action)
+
+        help_menu = self.menuBar().addMenu("Help")
+        canvas_shortcuts = QAction("Canvas Shortcuts…", self)
+        canvas_shortcuts.triggered.connect(self._show_canvas_shortcuts)
+        help_menu.addAction(canvas_shortcuts)
 
         language_menu = view_menu.addMenu("Language")
         self._language_actions = {}
@@ -447,6 +480,48 @@ class MainWindow(QMainWindow):
             value = 100
         valid = {percent for percent, _label in self.UI_SCALE_OPTIONS}
         return value if value in valid else 100
+
+    def _default_window_size(self) -> tuple[int, int]:
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app is not None else None
+        if screen is None:
+            return 1440, 900
+        available = screen.availableGeometry()
+        return (
+            max(640, min(1440, available.width() - 32)),
+            max(480, min(900, available.height() - 48)),
+        )
+
+    def _reset_window_layout(self) -> None:
+        """Restore the default dock arrangement and a screen-fitting window size."""
+        self.settings.remove("geometry")
+        self.settings.remove("window_state")
+        self.settings.sync()
+
+        self.setUpdatesEnabled(False)
+        try:
+            self.showNormal()
+            self.resize(*self._default_window_size())
+            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tree_dock)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.workbench_dock)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.diagnostics_dock)
+            self.tabifyDockWidget(self.workbench_dock, self.diagnostics_dock)
+            self.workbench_dock.show()
+            self.diagnostics_dock.show()
+            self.resizeDocks(
+                [self.tree_dock, self.inspector_dock], [250, 300], Qt.Orientation.Horizontal
+            )
+            self.resizeDocks([self.workbench_dock], [240], Qt.Orientation.Vertical)
+            self.tree_dock.show()
+            self.inspector_dock.show()
+            if self.session.active_context == "ASSEMBLE":
+                self.workbench_dock.hide()
+            else:
+                self.workbench_dock.show()
+                self.workbench_dock.raise_()
+        finally:
+            self.setUpdatesEnabled(True)
 
     def _apply_ui_scale(self, percent: int) -> None:
         app = QApplication.instance()
@@ -534,12 +609,12 @@ class MainWindow(QMainWindow):
     def _restore_workspace_settings(self) -> None:
         geometry = self.settings.value("geometry")
         if geometry is not None and not self.restoreGeometry(geometry):
-            self.resize(1440, 900)
+            self.resize(*self._default_window_size())
         state = self.settings.value("window_state")
         if state is not None:
             self.restoreState(state)
         context = self.settings.value("last_context", "ASSEMBLE")
-        workflow = str(self.settings.value("bake_workflow", "advanced") or "advanced")
+        workflow = str(self.settings.value("bake_workflow", "simple") or "simple")
         if context in CONTEXTS:
             self.set_context(str(context), production=(str(context) == "BAKE" and workflow == "simple"))
         axis = str(self.settings.value("workspace_axis", self.session.workspace_axis) or "COMPOSE")
@@ -552,6 +627,14 @@ class MainWindow(QMainWindow):
         tree_filter_mode = str(self.settings.value("tree_filter_mode", "All") or "All")
         if self.tree_dock.filter_selector.findText(tree_filter_mode) >= 0:
             self.tree_dock.filter_selector.setCurrentText(tree_filter_mode)
+        snap_setting = self.settings.value("canvas_snap_enabled", False)
+        if isinstance(snap_setting, str):
+            snap_enabled = snap_setting.strip().casefold() in {"1", "true", "yes", "on"}
+        else:
+            snap_enabled = bool(snap_setting)
+        self.session.canvas_snap = snap_enabled
+        if hasattr(self, "canvas_snap_action"):
+            self.canvas_snap_action.setChecked(snap_enabled)
         try:
             zoom = float(self.settings.value("canvas_zoom", 1.0))
             pan = (
@@ -573,6 +656,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("bake_workflow", self.bake_workbench.workflow_mode.currentData() or "simple")
         self.settings.setValue("tree_filter", self.tree_dock.search.text())
         self.settings.setValue("tree_filter_mode", self.tree_dock.filter_selector.currentText())
+        self.settings.setValue("canvas_snap_enabled", self.session.canvas_snap)
         self.settings.setValue("recent_files", self.recent_files)
         self.settings.sync()
 
@@ -603,15 +687,21 @@ class MainWindow(QMainWindow):
             # one workspace (directive #18) -- it never leaked into the
             # document, so there's nothing to preserve across a switch away.
             self.donor_workbench.clear_ghost()
+        if previous != context and self.document is not None:
+            self.canvas.scene_model.clear_transient_preview()
         if context == "HARVEST" and self.harvest_source_pool:
             self.harvest_workbench.refresh()
             self.workbench.setCurrentWidget(self.harvest_workbench)
-        elif context == "ASSEMBLE" and self.document is not None and self.producer_bundle_pool:
+        elif context == "ASSEMBLE" and self.document is not None:
             self.derived_workbench.refresh()
             if self.derived_workbench.rows:
                 self.workbench_dock.show()
                 self.workbench_dock.raise_()
                 self.workbench.setCurrentWidget(self.derived_workbench)
+            else:
+                self._set_workbench_message(
+                    "ASSEMBLE Workbench\nSelection remains active while context changes."
+                )
         elif context == "VARIANTS" and self.document is not None:
             self.variant_workbench.refresh()
             self.workbench.setCurrentWidget(self.variant_workbench)
@@ -639,8 +729,6 @@ class MainWindow(QMainWindow):
             # editing aid (directive #18); it isn't part of any other
             # context's canvas presentation.
             self.canvas.scene_model.region_edit.clear()
-        if previous in {"BAKE", "VARIANTS"} and context not in {"BAKE", "VARIANTS"}:
-            self.canvas.scene_model.clear_transient_preview()
         if hasattr(self, "diagnostics_dock"):
             self._refresh_diagnostics()
 
@@ -678,6 +766,10 @@ class MainWindow(QMainWindow):
         # Core renderer is the preview source of truth. Loading is read-only.
         render_reference(document, layers_dir)
         self._display_document(document, image_sources, layers_dir, source_map=False, bundle_path=bundle_path)
+        self.derived_workbench.refresh()
+        if self.derived_workbench.rows and self.session.active_context == "ASSEMBLE":
+            self.workbench_dock.show()
+            self.workbench.setCurrentWidget(self.derived_workbench)
         self._remember_recent(bundle_path)
 
     def _display_document(
@@ -771,7 +863,7 @@ class MainWindow(QMainWindow):
                     selected_layers[entry.asset_id] = choices[entry.asset_id]
             if not self.run_command(
                 lambda document, _image_sources: apply_remap_resolution(
-                    document, prepared.bundle, report, choices
+                    document, _image_sources, prepared.bundle, report, choices
                 )
             ):
                 return
@@ -975,12 +1067,62 @@ class MainWindow(QMainWindow):
     def export_rig_bundle_dialog(self) -> None:
         if self.document is None:
             return
+        review = RigExportReviewDialog(
+            self.document,
+            self.image_sources,
+            self,
+            on_issue=self._focus_export_issue,
+        )
+        if review.exec() != review.DialogCode.Accepted:
+            return
         chosen = QFileDialog.getExistingDirectory(self, "Export Rig Bundle As")
         if chosen:
-            review = RigExportReviewDialog(self.document, self.image_sources, self)
-            if review.exec() != review.DialogCode.Accepted:
-                return
             self._write_rig_bundle(Path(chosen))
+
+    def _focus_export_issue(self, message: str) -> None:
+        """Route an export BLOCK to its matching editor when one is known."""
+        if self.document is None:
+            return
+        for plan_id, plan in self.document.bake_plans.items():
+            if repr(plan_id) in message:
+                self.set_context("BAKE")
+                matches = self.bake_workbench.plan_list.findItems(plan_id, Qt.MatchFlag.MatchExactly)
+                if matches:
+                    self.bake_workbench.plan_list.setCurrentItem(matches[0])
+                self.statusBar().showMessage(f"Review Bake Plan {plan_id!r}: {message}", 8000)
+                return
+
+        target_instance = next(
+            (instance_id for instance_id in self.document.instances if repr(instance_id) in message),
+            None,
+        )
+        if target_instance is None:
+            target_asset = next(
+                (asset_id for asset_id in self.document.assets if repr(asset_id) in message),
+                None,
+            )
+            if target_asset is not None:
+                target_instances = [
+                    instance_id
+                    for instance_id, instance in self.document.instances.items()
+                    if instance.asset_ref == target_asset
+                ]
+                target_instance = target_instances[0] if target_instances else None
+
+        lowered = message.lower()
+        context = (
+            "DONOR" if "donor" in lowered
+            else "RIG INTENT" if any(term in lowered for term in ("attachment", "region", "rig intent"))
+            else "BAKE"
+        )
+        if target_instance is not None:
+            asset = self.document.assets.get(self.document.instances[target_instance].asset_ref)
+            if asset is not None and asset.provenance.get("operation") in {"donor_import", "donor_replace"}:
+                context = "DONOR"
+            self.focus_diagnostic(Diagnostic("BLOCK", message, target_instance, context))
+            return
+        self.set_context(context)
+        self.statusBar().showMessage(f"{context}: {message}", 8000)
 
     def export_ora_dialog(self) -> None:
         if self.document is None:
@@ -1084,8 +1226,85 @@ class MainWindow(QMainWindow):
         self.tree_dock.search.selectAll()
 
     def set_canvas_tool(self, tool: str) -> None:
+        self.canvas.cancel_keyboard_move()
+        if self.canvas.scene_model.gizmo.drag is not None:
+            self.canvas.scene_model.gizmo.cancel_drag()
+        self.canvas.scene_model.gizmo.reposition()
         self.session.canvas_tool = tool
-        self.statusBar().showMessage(f"Canvas tool: {tool}", 2500)
+        shortcut = {"select": "V", "move": "G", "rotate": "R", "scale": "S"}.get(tool, "")
+        self.statusBar().showMessage(
+            f"Canvas tool: {tool.title()} ({shortcut}) · V Select · G Move · R Rotate · S Scale · "
+            "Space Pan · Alt Cycle selection",
+            5000,
+        )
+
+    def _set_canvas_snap(self, enabled: bool) -> None:
+        self.session.canvas_snap = bool(enabled)
+        if hasattr(self, "canvas_snap_action") and self.canvas_snap_action.isChecked() != self.session.canvas_snap:
+            self.canvas_snap_action.setChecked(self.session.canvas_snap)
+        self.settings.setValue("canvas_snap_enabled", self.session.canvas_snap)
+        if hasattr(self, "canvas"):
+            self.canvas.scene_model.set_snap_guides()
+        message = (
+            "Canvas snapping enabled: layer edges/centers and canvas bounds."
+            if self.session.canvas_snap else "Canvas snapping disabled."
+        )
+        self.statusBar().showMessage(message, 4000)
+
+    def _show_canvas_shortcuts(self) -> None:
+        QMessageBox.information(
+            self,
+            "Canvas Shortcuts",
+            "V  Select tool\nG  Move tool\nR  Rotate tool\nS  Scale tool\n"
+            "Ctrl+click  Add or remove a layer from the selection; group scale/rotation uses its center\n"
+            "View > Snap to Canvas and Layers  Align moving edges/centers; dashed guides show the snap target\n"
+            "Arrow keys  Move selection by 1 document pixel; move an active donor preview while aligning\n"
+            "Shift+Arrow  Move selection or donor preview by 10 document pixels\n"
+            "Hold an arrow and release to make one undoable move; Esc cancels.\n"
+            "Space  Pan the canvas\nAlt+click  Cycle overlapping layers",
+        )
+
+    def _align_selection_to_canvas(self, anchor: str) -> None:
+        selected = list(self.selection_model.instance_ids)
+        if not selected:
+            self.statusBar().showMessage("Select one or more layers to align.", 4000)
+            return
+        rects = [
+            self.canvas.scene_model._hit_items[instance_id].sceneBoundingRect()
+            for instance_id in selected
+            if instance_id in self.canvas.scene_model._hit_items
+        ]
+        if not rects:
+            self.statusBar().showMessage("The selection has no visible canvas bounds to align.", 4000)
+            return
+        bounds = rects[0]
+        for rect in rects[1:]:
+            bounds = bounds.united(rect)
+        canvas = self.canvas.scene_model.sceneRect()
+        horizontal = "left" if "left" in anchor else "right" if "right" in anchor else "center"
+        vertical = "top" if "top" in anchor else "bottom" if "bottom" in anchor else "center"
+        if horizontal == "left":
+            dx = canvas.left() - bounds.left()
+        elif horizontal == "right":
+            dx = canvas.right() - bounds.right()
+        else:
+            dx = canvas.center().x() - bounds.center().x()
+        if vertical == "top":
+            dy = canvas.top() - bounds.top()
+        elif vertical == "bottom":
+            dy = canvas.bottom() - bounds.bottom()
+        else:
+            dy = canvas.center().y() - bounds.center().y()
+        from .commands import move_instances_relative
+
+        if self.run_command(
+            lambda document, image_sources: move_instances_relative(
+                document, image_sources, selected, dx=dx, dy=dy
+            )
+        ):
+            self.statusBar().showMessage(
+                f"Selection aligned to canvas {anchor.replace('_', ' ')}.", 4000
+            )
 
     def set_preview_mode_shortcut(self, mode: str) -> None:
         self.session.preview_mode = mode
@@ -1133,12 +1352,12 @@ class MainWindow(QMainWindow):
         return True
 
     def _nudge_draw_order(self, *, direction: int = 0, to_extreme: int = 0) -> None:
-        if len(self.selection_model.instance_ids) != 1:
+        selected = list(self.selection_model.instance_ids)
+        if not selected:
             return
-        instance_id = self.selection_model.instance_ids[0]
         self.run_command(
-            lambda document, image_sources: nudge_draw_order(
-                document, instance_id, direction=direction, to_extreme=to_extreme
+            lambda document, image_sources: move_draw_order_selection(
+                document, selected, direction=direction, to_extreme=to_extreme
             )
         )
 
